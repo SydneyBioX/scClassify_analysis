@@ -1,0 +1,2264 @@
+---
+title: "scClassify Ensemble Results - Levin PBMC"
+author: "Yingxin Lin"
+output:
+  html_document:
+    code_folding: hide
+    number_sections: yes
+    toc: yes
+    fig_height: 12
+    fig_width: 12
+    toc_float:
+      collapsed: true
+      smooth_scroll: false
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,message = FALSE,warning = FALSE)
+```
+
+# Data and Functions
+
+```{r}
+library(SingleCellExperiment)
+library(scater)
+library(scran)
+library(ggplot2)
+library(gridExtra)
+library(ggthemes)
+library(pheatmap)
+
+
+freqError <- function(x){
+  x <- factor(x, levels = errClass)
+  table(x)/length(x)
+}
+
+
+errClass <- c("correct", "correctly unassigned",  "intermediate", "incorrectly unassigned",
+              "error assigned", "misclassified")
+
+ClassifyError <- function(cellTypes_pred, cellTypes_test, cellTypes_train){
+  if(length(cellTypes_pred)!=length(cellTypes_test)){
+    stop("wrong input")
+  }
+  train_ref <- unique(cellTypes_train)
+  test_ref <- unique(cellTypes_test)
+  res <- sapply(1:length(cellTypes_pred), function(i){
+    if(cellTypes_test[i]%in%train_ref){
+      if(cellTypes_pred[i] %in% c("unassigned", "Unassigned")){
+        "incorrectly unassigned"
+      }else if(cellTypes_pred[i] == "intermediate"){
+        "intermediate"
+      }else{
+        if(cellTypes_test[i] == cellTypes_pred[i]){
+          "correct"
+        }else if(grepl(cellTypes_test[i], cellTypes_pred[i])){
+          "intermediate"
+        }
+        else{
+          "misclassified"
+        }
+      }
+    }else{
+      if(cellTypes_pred[i] %in% c("unassigned","Unassigned")){
+        "correctly unassigned"
+      }else{
+        "error assigned"
+      }
+    }
+  })
+  return(res)
+}
+source("scripts/helper_functions.R")
+```
+
+
+
+
+```{r}
+levinPBMCbenchmark <- readRDS("data/levinPBMCbenchmark.rds")
+levinPBMCbenchmark_smartSeq <- levinPBMCbenchmark[, levinPBMCbenchmark$Method == "Smart-seq2"]
+levinPBMCbenchmark_celSeq <- levinPBMCbenchmark[, levinPBMCbenchmark$Method == "CEL-Seq2"]
+levinPBMCbenchmark_inDrops <- levinPBMCbenchmark[, levinPBMCbenchmark$Method == "inDrops"]
+levinPBMCbenchmark_dropSeqs <- levinPBMCbenchmark[, levinPBMCbenchmark$Method == "Drop-seq"]
+levinPBMCbenchmark_seqWells <- levinPBMCbenchmark[, levinPBMCbenchmark$Method == "Seq-Well"]
+levinPBMCbenchmark_10x <- levinPBMCbenchmark[, levinPBMCbenchmark$Method == "10x Chromium (v3)"]
+levinPBMCbenchmark_10xV2 <- levinPBMCbenchmark[, levinPBMCbenchmark$Method == "10x Chromium (v2)"]
+
+levinPBMCbenchmark_smartSeq$CellType2 <- as.character(droplevels(levinPBMCbenchmark_smartSeq$CellType))
+levinPBMCbenchmark_smartSeq$CellType2[grep("monocyte", levinPBMCbenchmark_smartSeq$CellType2)] <- "monocyte"
+levinPBMCbenchmark_smartSeq$CellType2[grep("T cell", levinPBMCbenchmark_smartSeq$CellType2)] <- "T cell"
+
+levinPBMCbenchmark_celSeq$CellType2 <- as.character(droplevels(levinPBMCbenchmark_celSeq$CellType))
+levinPBMCbenchmark_celSeq$CellType2[grep("monocyte", levinPBMCbenchmark_celSeq$CellType2)] <- "monocyte"
+levinPBMCbenchmark_celSeq$CellType2[grep("T cell", levinPBMCbenchmark_celSeq$CellType2)] <- "T cell"
+
+levinPBMCbenchmark_10x$CellType2 <- as.character(droplevels(levinPBMCbenchmark_10x$CellType))
+levinPBMCbenchmark_10x$CellType2[grep("monocyte", levinPBMCbenchmark_10x$CellType2)] <- "monocyte"
+levinPBMCbenchmark_10x$CellType2[grep("T cell", levinPBMCbenchmark_10x$CellType2)] <- "T cell"
+
+levinPBMCbenchmark_10xV2$CellType2 <- as.character(droplevels(levinPBMCbenchmark_10xV2$CellType))
+levinPBMCbenchmark_10xV2$CellType2[grep("monocyte", levinPBMCbenchmark_10xV2$CellType2)] <- "monocyte"
+levinPBMCbenchmark_10xV2$CellType2[grep("T cell", levinPBMCbenchmark_10xV2$CellType2)] <- "T cell"
+
+levinPBMCbenchmark_seqWells$CellType2 <- as.character(droplevels(levinPBMCbenchmark_seqWells$CellType))
+levinPBMCbenchmark_seqWells$CellType2[grep("monocyte", levinPBMCbenchmark_seqWells$CellType2)] <- "monocyte"
+levinPBMCbenchmark_seqWells$CellType2[grep("T cell", levinPBMCbenchmark_seqWells$CellType2)] <- "T cell"
+
+levinPBMCbenchmark_inDrops$CellType2 <- as.character(droplevels(levinPBMCbenchmark_inDrops$CellType))
+levinPBMCbenchmark_inDrops$CellType2[grep("monocyte", levinPBMCbenchmark_inDrops$CellType2)] <- "monocyte"
+levinPBMCbenchmark_inDrops$CellType2[grep("T cell", levinPBMCbenchmark_inDrops$CellType2)] <- "T cell"
+
+levinPBMCbenchmark_dropSeqs$CellType2 <- as.character(droplevels(levinPBMCbenchmark_dropSeqs$CellType))
+levinPBMCbenchmark_dropSeqs$CellType2[grep("monocyte", levinPBMCbenchmark_dropSeqs$CellType2)] <- "monocyte"
+levinPBMCbenchmark_dropSeqs$CellType2[grep("T cell", levinPBMCbenchmark_dropSeqs$CellType2)] <- "T cell"
+
+```
+
+
+# Level 1
+
+
+```{r}
+levinCelSeqRes_prob70_ensemble <- readRDS("ensembleRes/levinCelSeqRes_prob70_ensemble.rds")
+levinSmartSeqRes_prob70_ensemble <- readRDS("ensembleRes/levinSmartSeqRes_prob70_ensemble.rds")
+levinInDropsRes_prob70_ensemble <- readRDS("ensembleRes/levinInDropsRes_prob70_ensemble.rds")
+levinSeqWellsRes_prob70_ensemble <- readRDS("ensembleRes/levinSeqWellsRes_prob70_ensemble.rds")
+levinTenXRes_prob70_ensemble <- readRDS("ensembleRes/levinTenXRes_prob70_ensemble.rds")
+levinTenXV2Res_prob70_ensemble <- readRDS("ensembleRes/levinTenXV2Res_prob70_ensemble.rds")
+levinDropSeqsRes_prob70_ensemble <- readRDS("ensembleRes/levinDropSeqsRes_prob70_ensemble.rds")
+
+idx_seqWell_filtered <- which(levinPBMCbenchmark_seqWells$CellType2 == "Unassigned")
+```
+
+
+
+
+
+
+```{r}
+
+levinCelSeq_ensemble_error <- lapply(levinCelSeqRes_prob70_ensemble$testRes, getEnsembleError)
+
+celSeq_ensemble_acc_train <- levinCelSeq_ensemble_error$celSeq[,1] + levinCelSeq_ensemble_error$celSeq[,2]
+
+levinCelSeqRes_ensemble_res_weights <- lapply(levinCelSeqRes_prob70_ensemble$testRes, function(x) 
+  getEnsembleRes(x, 
+                 exclude = c( "_KNN"),
+                 weight = alpha(1 - celSeq_ensemble_acc_train)))
+
+
+
+
+CelSeq_ensemble_res_final_weights <- rbind(smartSeq = freqError(ClassifyError(as.character(levinCelSeqRes_ensemble_res_weights$smartseq$cellTypes), levinPBMCbenchmark_smartSeq$CellType2, levinPBMCbenchmark_celSeq$CellType2)),
+                                           celSeq = freqError(ClassifyError(as.character(levinCelSeqRes_ensemble_res_weights$celSeq$cellTypes), levinPBMCbenchmark_celSeq$CellType2, levinPBMCbenchmark_celSeq$CellType2)),
+                                           tenX = freqError(ClassifyError(as.character(levinCelSeqRes_ensemble_res_weights$tenX$cellTypes), levinPBMCbenchmark_10x$CellType2, levinPBMCbenchmark_celSeq$CellType2)),
+                                           tenXV2 = freqError(ClassifyError(as.character(levinCelSeqRes_ensemble_res_weights$tenXV2$cellTypes), levinPBMCbenchmark_10xV2$CellType2, levinPBMCbenchmark_celSeq$CellType2)),
+                                           seqWells = freqError(ClassifyError(as.character(levinCelSeqRes_ensemble_res_weights$seqWells$cellTypes[-idx_seqWell_filtered]), levinPBMCbenchmark_seqWells$CellType2[-idx_seqWell_filtered], levinPBMCbenchmark_celSeq$CellType2)),
+                                           inDrops = freqError(ClassifyError(as.character(levinCelSeqRes_ensemble_res_weights$inDrops$cellTypes), levinPBMCbenchmark_inDrops$CellType2, levinPBMCbenchmark_celSeq$CellType2)),
+                                           dropSeqs = freqError(ClassifyError(as.character(levinCelSeqRes_ensemble_res_weights$dropSeqs$cellTypes), levinPBMCbenchmark_dropSeqs$CellType2, levinPBMCbenchmark_celSeq$CellType2)))
+
+
+
+CelSeq_scClassify_res_pearson <- rbind(smartSeq = freqError(ClassifyError(as.character(levinCelSeqRes_prob70_ensemble$testRes$smartseq$pearson_WKNN_limma$predRes), levinPBMCbenchmark_smartSeq$CellType2, levinPBMCbenchmark_celSeq$CellType2)),
+                                       celSeq = freqError(ClassifyError(as.character(levinCelSeqRes_prob70_ensemble$testRes$celSeq$pearson_WKNN_limma$predRes), levinPBMCbenchmark_celSeq$CellType2, levinPBMCbenchmark_celSeq$CellType2)),
+                                       tenX = freqError(ClassifyError(as.character(levinCelSeqRes_prob70_ensemble$testRes$tenX$pearson_WKNN_limma$predRes), levinPBMCbenchmark_10x$CellType2, levinPBMCbenchmark_celSeq$CellType2)),
+                                       tenXV2 = freqError(ClassifyError(as.character(levinCelSeqRes_prob70_ensemble$testRes$tenXV2$pearson_WKNN_limma$predRes), levinPBMCbenchmark_10xV2$CellType2, levinPBMCbenchmark_celSeq$CellType2)),
+                                       seqWells = freqError(ClassifyError(as.character(levinCelSeqRes_prob70_ensemble$testRes$seqWells$pearson_WKNN_limma$predRes), levinPBMCbenchmark_seqWells$CellType2, levinPBMCbenchmark_celSeq$CellType2)),
+                                       inDrops = freqError(ClassifyError(as.character(levinCelSeqRes_prob70_ensemble$testRes$inDrops$pearson_WKNN_limma$predRes), levinPBMCbenchmark_inDrops$CellType2, levinPBMCbenchmark_celSeq$CellType2)),
+                                       dropSeqs = freqError(ClassifyError(as.character(levinCelSeqRes_prob70_ensemble$testRes$dropSeqs$pearson_WKNN_limma$predRes), levinPBMCbenchmark_dropSeqs$CellType2, levinPBMCbenchmark_celSeq$CellType2)))
+
+
+
+```
+
+
+
+
+
+
+```{r}
+
+
+levinSmartSeq_ensemble_error <- lapply(levinSmartSeqRes_prob70_ensemble$testRes, getEnsembleError)
+
+
+SmartSeq_ensemble_acc_train <- levinSmartSeq_ensemble_error$smartseq[,1] + levinSmartSeq_ensemble_error$smartseq[,2]
+
+
+
+
+levinSmartSeqRes_ensemble_res_weights <- lapply(levinSmartSeqRes_prob70_ensemble$testRes, function(x) 
+  getEnsembleRes(x, 
+                 exclude = c( "_KNN"),
+                 weight = alpha(1 - SmartSeq_ensemble_acc_train)))
+
+
+SmartSeq_ensemble_res_final_weights <- rbind(smartSeq = freqError(ClassifyError(as.character(levinSmartSeqRes_ensemble_res_weights$smartseq$cellTypes), levinPBMCbenchmark_smartSeq$CellType2, levinPBMCbenchmark_smartSeq$CellType2)),
+                                             celSeq = freqError(ClassifyError(as.character(levinSmartSeqRes_ensemble_res_weights$celSeq$cellTypes), levinPBMCbenchmark_celSeq$CellType2, levinPBMCbenchmark_smartSeq$CellType2)),
+                                             tenX = freqError(ClassifyError(as.character(levinSmartSeqRes_ensemble_res_weights$tenX$cellTypes), levinPBMCbenchmark_10x$CellType2, levinPBMCbenchmark_smartSeq$CellType2)),
+                                             tenXV2 = freqError(ClassifyError(as.character(levinSmartSeqRes_ensemble_res_weights$tenXV2$cellTypes), levinPBMCbenchmark_10xV2$CellType2, levinPBMCbenchmark_smartSeq$CellType2)),
+                                             seqWells = freqError(ClassifyError(as.character(levinSmartSeqRes_ensemble_res_weights$seqWells$cellTypes), levinPBMCbenchmark_seqWells$CellType2[-idx_seqWell_filtered], levinPBMCbenchmark_smartSeq$CellType2)),
+                                             inDrops = freqError(ClassifyError(as.character(levinSmartSeqRes_ensemble_res_weights$inDrops$cellTypes), levinPBMCbenchmark_inDrops$CellType2, levinPBMCbenchmark_smartSeq$CellType2)),
+                                             dropSeqs = freqError(ClassifyError(as.character(levinSmartSeqRes_ensemble_res_weights$dropSeqs$cellTypes), levinPBMCbenchmark_dropSeqs$CellType2, levinPBMCbenchmark_smartSeq$CellType2)))
+
+
+
+
+
+SmartSeq_scClassify_res_pearson <- rbind(smartSeq = freqError(ClassifyError(as.character(levinSmartSeqRes_prob70_ensemble$testRes$smartseq$pearson_WKNN_limma$predRes), levinPBMCbenchmark_smartSeq$CellType2, levinPBMCbenchmark_smartSeq$CellType2)),
+                                         celSeq = freqError(ClassifyError(as.character(levinSmartSeqRes_prob70_ensemble$testRes$celSeq$pearson_WKNN_limma$predRes), levinPBMCbenchmark_celSeq$CellType2, levinPBMCbenchmark_smartSeq$CellType2)),
+                                         tenX = freqError(ClassifyError(as.character(levinSmartSeqRes_prob70_ensemble$testRes$tenX$pearson_WKNN_limma$predRes), levinPBMCbenchmark_10x$CellType2, levinPBMCbenchmark_smartSeq$CellType2)),
+                                         tenXV2 = freqError(ClassifyError(as.character(levinSmartSeqRes_prob70_ensemble$testRes$tenXV2$pearson_WKNN_limma$predRes), levinPBMCbenchmark_10xV2$CellType2, levinPBMCbenchmark_smartSeq$CellType2)),
+                                         seqWells = freqError(ClassifyError(as.character(levinSmartSeqRes_prob70_ensemble$testRes$seqWells$pearson_WKNN_limma$predRes), levinPBMCbenchmark_seqWells$CellType2[-idx_seqWell_filtered], levinPBMCbenchmark_smartSeq$CellType2)),
+                                         inDrops = freqError(ClassifyError(as.character(levinSmartSeqRes_prob70_ensemble$testRes$inDrops$pearson_WKNN_limma$predRes), levinPBMCbenchmark_inDrops$CellType2, levinPBMCbenchmark_smartSeq$CellType2)),
+                                         dropSeqs = freqError(ClassifyError(as.character(levinSmartSeqRes_prob70_ensemble$testRes$dropSeqs$pearson_WKNN_limma$predRes), levinPBMCbenchmark_dropSeqs$CellType2, levinPBMCbenchmark_smartSeq$CellType2)))
+```
+
+
+
+
+
+
+
+```{r}
+
+
+levinInDrops_ensemble_error <- lapply(levinInDropsRes_prob70_ensemble$testRes, getEnsembleError)
+
+
+InDrops_ensemble_acc_train <- levinInDrops_ensemble_error$inDrops[,1] + levinInDrops_ensemble_error$inDrops[,2]
+
+
+
+levinInDropsRes_ensemble_res_weights <- lapply(levinInDropsRes_prob70_ensemble$testRes, function(x) 
+  getEnsembleRes(x, 
+                 exclude = c("_KNN"),
+                 weight = alpha(1 - InDrops_ensemble_acc_train)))
+
+
+
+InDrops_ensemble_res_final_weights <- rbind(smartseq = freqError(ClassifyError(as.character(levinInDropsRes_ensemble_res_weights$smartseq$cellTypes), levinPBMCbenchmark_smartSeq$CellType2, levinPBMCbenchmark_inDrops$CellType2)),
+                                            celSeq = freqError(ClassifyError(as.character(levinInDropsRes_ensemble_res_weights$celSeq$cellTypes), levinPBMCbenchmark_celSeq$CellType2, levinPBMCbenchmark_inDrops$CellType2)),
+                                            tenX = freqError(ClassifyError(as.character(levinInDropsRes_ensemble_res_weights$tenX$cellTypes), levinPBMCbenchmark_10x$CellType2, levinPBMCbenchmark_inDrops$CellType2)),
+                                            tenXV2 = freqError(ClassifyError(as.character(levinInDropsRes_ensemble_res_weights$tenXV2$cellTypes), levinPBMCbenchmark_10xV2$CellType2, levinPBMCbenchmark_inDrops$CellType2)),
+                                            seqWells = freqError(ClassifyError(as.character(levinInDropsRes_ensemble_res_weights$seqWells$cellTypes), levinPBMCbenchmark_seqWells$CellType2[-idx_seqWell_filtered], levinPBMCbenchmark_inDrops$CellType2)),
+                                            inDrops = freqError(ClassifyError(as.character(levinInDropsRes_ensemble_res_weights$inDrops$cellTypes), levinPBMCbenchmark_inDrops$CellType2, levinPBMCbenchmark_inDrops$CellType2)),
+                                            dropSeqs = freqError(ClassifyError(as.character(levinInDropsRes_ensemble_res_weights$dropSeqs$cellTypes), levinPBMCbenchmark_dropSeqs$CellType2, levinPBMCbenchmark_inDrops$CellType2)))
+
+
+
+
+InDrops_scClassify_res_pearson <- rbind(smartseq = freqError(ClassifyError(as.character(levinInDropsRes_prob70_ensemble$testRes$smartseq$pearson_WKNN_limma$predRes), levinPBMCbenchmark_smartSeq$CellType2, levinPBMCbenchmark_inDrops$CellType2)),
+                                        celSeq = freqError(ClassifyError(as.character(levinInDropsRes_prob70_ensemble$testRes$celSeq$pearson_WKNN_limma$predRes), levinPBMCbenchmark_celSeq$CellType2, levinPBMCbenchmark_inDrops$CellType2)),
+                                        tenX = freqError(ClassifyError(as.character(levinInDropsRes_prob70_ensemble$testRes$tenX$pearson_WKNN_limma$predRes), levinPBMCbenchmark_10x$CellType2, levinPBMCbenchmark_inDrops$CellType2)),
+                                        tenXV2 = freqError(ClassifyError(as.character(levinInDropsRes_prob70_ensemble$testRes$tenXV2$pearson_WKNN_limma$predRes), levinPBMCbenchmark_10xV2$CellType2, levinPBMCbenchmark_inDrops$CellType2)),
+                                        seqWells = freqError(ClassifyError(as.character(levinInDropsRes_prob70_ensemble$testRes$seqWells$pearson_WKNN_limma$predRes), levinPBMCbenchmark_seqWells$CellType2[-idx_seqWell_filtered], levinPBMCbenchmark_inDrops$CellType2)),
+                                        inDrops = freqError(ClassifyError(as.character(levinInDropsRes_prob70_ensemble$testRes$inDrops$pearson_WKNN_limma$predRes), levinPBMCbenchmark_inDrops$CellType2, levinPBMCbenchmark_inDrops$CellType2)),
+                                        dropSeqs = freqError(ClassifyError(as.character(levinInDropsRes_prob70_ensemble$testRes$dropSeqs$pearson_WKNN_limma$predRes), levinPBMCbenchmark_dropSeqs$CellType2, levinPBMCbenchmark_inDrops$CellType2)))
+```
+
+
+
+```{r}
+
+levinSeqWells_ensemble_error <- lapply(levinSeqWellsRes_prob70_ensemble$testRes, getEnsembleError)
+
+
+SeqWells_ensemble_acc_train <- levinSeqWells_ensemble_error$seqWells[,1] + levinSeqWells_ensemble_error$seqWells[,2]
+
+
+
+levinSeqWellsRes_ensemble_res_weights <- lapply(levinSeqWellsRes_prob70_ensemble$testRes, function(x) 
+  getEnsembleRes(x, 
+                 exclude = c("_KNN"),
+                 weight = alpha(1 - SeqWells_ensemble_acc_train)))
+
+
+SeqWells_ensemble_res_final_weights <- rbind(smartseq = freqError(ClassifyError(as.character(levinSeqWellsRes_ensemble_res_weights$smartseq$cellTypes), levinPBMCbenchmark_smartSeq$CellType2, levinPBMCbenchmark_seqWells$CellType2)),
+                                             celSeq = freqError(ClassifyError(as.character(levinSeqWellsRes_ensemble_res_weights$celSeq$cellTypes), levinPBMCbenchmark_celSeq$CellType2, levinPBMCbenchmark_seqWells$CellType2)),
+                                             tenX = freqError(ClassifyError(as.character(levinSeqWellsRes_ensemble_res_weights$tenX$cellTypes), levinPBMCbenchmark_10x$CellType2, levinPBMCbenchmark_seqWells$CellType2)),
+                                             tenXV2 = freqError(ClassifyError(as.character(levinSeqWellsRes_ensemble_res_weights$tenXV2$cellTypes), levinPBMCbenchmark_10xV2$CellType2, levinPBMCbenchmark_seqWells$CellType2)),
+                                             seqWells = freqError(ClassifyError(as.character(levinSeqWellsRes_ensemble_res_weights$seqWells$cellTypes), levinPBMCbenchmark_seqWells$CellType2[-idx_seqWell_filtered], levinPBMCbenchmark_seqWells$CellType2)),
+                                             inDrops = freqError(ClassifyError(as.character(levinSeqWellsRes_ensemble_res_weights$inDrops$cellTypes), levinPBMCbenchmark_inDrops$CellType2, levinPBMCbenchmark_seqWells$CellType2)),
+                                             dropSeqs = freqError(ClassifyError(as.character(levinSeqWellsRes_ensemble_res_weights$dropSeqs$cellTypes), levinPBMCbenchmark_dropSeqs$CellType2, levinPBMCbenchmark_seqWells$CellType2)))
+
+
+
+SeqWells_scClassify_res_pearson <- rbind(smartseq = freqError(ClassifyError(as.character(levinSeqWellsRes_prob70_ensemble$testRes$smartseq$pearson_WKNN_limma$predRes), levinPBMCbenchmark_smartSeq$CellType2, levinPBMCbenchmark_seqWells$CellType2)),
+                                         celSeq = freqError(ClassifyError(as.character(levinSeqWellsRes_prob70_ensemble$testRes$celSeq$pearson_WKNN_limma$predRes), levinPBMCbenchmark_celSeq$CellType2, levinPBMCbenchmark_seqWells$CellType2)),
+                                         tenX = freqError(ClassifyError(as.character(levinSeqWellsRes_prob70_ensemble$testRes$tenX$pearson_WKNN_limma$predRes), levinPBMCbenchmark_10x$CellType2, levinPBMCbenchmark_seqWells$CellType2)),
+                                         tenXV2 = freqError(ClassifyError(as.character(levinSeqWellsRes_prob70_ensemble$testRes$tenXV2$pearson_WKNN_limma$predRes), levinPBMCbenchmark_10xV2$CellType2, levinPBMCbenchmark_seqWells$CellType2)),
+                                         seqWells = freqError(ClassifyError(as.character(levinSeqWellsRes_prob70_ensemble$testRes$seqWells$pearson_WKNN_limma$predRes), levinPBMCbenchmark_seqWells$CellType2[-idx_seqWell_filtered], levinPBMCbenchmark_seqWells$CellType2)),
+                                         inDrops = freqError(ClassifyError(as.character(levinSeqWellsRes_prob70_ensemble$testRes$inDrops$pearson_WKNN_limma$predRes), levinPBMCbenchmark_inDrops$CellType2, levinPBMCbenchmark_seqWells$CellType2)),
+                                         dropSeqs = freqError(ClassifyError(as.character(levinSeqWellsRes_prob70_ensemble$testRes$dropSeqs$pearson_WKNN_limma$predRes), levinPBMCbenchmark_dropSeqs$CellType2, levinPBMCbenchmark_seqWells$CellType2)))
+
+```
+
+
+
+
+
+```{r}
+
+levinTenX_ensemble_error <- lapply(levinTenXRes_prob70_ensemble$testRes, getEnsembleError)
+
+
+TenX_ensemble_acc_train <- levinTenX_ensemble_error$tenX[,1] + levinTenX_ensemble_error$tenX[,2]
+
+
+levinTenXRes_ensemble_res_weights <- lapply(levinTenXRes_prob70_ensemble$testRes, function(x) 
+  getEnsembleRes(x, 
+                 exclude = c("_KNN"),
+                 weight = alpha(1 - TenX_ensemble_acc_train)))
+
+
+
+TenX_ensemble_res_final_weights <- rbind(smartseq = freqError(ClassifyError(as.character(levinTenXRes_ensemble_res_weights$smartseq$cellTypes), levinPBMCbenchmark_smartSeq$CellType2, levinPBMCbenchmark_10x$CellType2)),
+                                         celSeq = freqError(ClassifyError(as.character(levinTenXRes_ensemble_res_weights$celSeq$cellTypes), levinPBMCbenchmark_celSeq$CellType2, levinPBMCbenchmark_10x$CellType2)),
+                                         tenX = freqError(ClassifyError(as.character(levinTenXRes_ensemble_res_weights$tenX$cellTypes), levinPBMCbenchmark_10x$CellType2, levinPBMCbenchmark_10x$CellType2)),
+                                         tenXV2 = freqError(ClassifyError(as.character(levinTenXRes_ensemble_res_weights$tenXV2$cellTypes), levinPBMCbenchmark_10xV2$CellType2, levinPBMCbenchmark_10x$CellType2)),
+                                         seqWells = freqError(ClassifyError(as.character(levinTenXRes_ensemble_res_weights$seqWells$cellTypes[-idx_seqWell_filtered]), levinPBMCbenchmark_seqWells$CellType2[-idx_seqWell_filtered], levinPBMCbenchmark_10x$CellType2)),
+                                         inDrops = freqError(ClassifyError(as.character(levinTenXRes_ensemble_res_weights$inDrops$cellTypes), levinPBMCbenchmark_inDrops$CellType2, levinPBMCbenchmark_10x$CellType2)),
+                                         dropSeqs = freqError(ClassifyError(as.character(levinTenXRes_ensemble_res_weights$dropSeqs$cellTypes), levinPBMCbenchmark_dropSeqs$CellType2, levinPBMCbenchmark_10x$CellType2)))
+
+
+
+TenX_scClassify_res_pearson <- rbind(smartseq = freqError(ClassifyError(as.character(levinTenXRes_prob70_ensemble$testRes$smartseq$pearson_WKNN_limma$predRes), levinPBMCbenchmark_smartSeq$CellType2, levinPBMCbenchmark_10x$CellType2)),
+                                     celSeq = freqError(ClassifyError(as.character(levinTenXRes_prob70_ensemble$testRes$celSeq$pearson_WKNN_limma$predRes), levinPBMCbenchmark_celSeq$CellType2, levinPBMCbenchmark_10x$CellType2)),
+                                     tenX = freqError(ClassifyError(as.character(levinTenXRes_prob70_ensemble$testRes$tenX$pearson_WKNN_limma$predRes), levinPBMCbenchmark_10x$CellType2, levinPBMCbenchmark_10x$CellType2)),
+                                     tenXV2 = freqError(ClassifyError(as.character(levinTenXRes_prob70_ensemble$testRes$tenXV2$pearson_WKNN_limma$predRes), levinPBMCbenchmark_10xV2$CellType2, levinPBMCbenchmark_10x$CellType2)),
+                                     seqWells = freqError(ClassifyError(as.character(levinTenXRes_prob70_ensemble$testRes$seqWells$pearson_WKNN_limma$predRes), levinPBMCbenchmark_seqWells$CellType2, levinPBMCbenchmark_10x$CellType2)),
+                                     inDrops = freqError(ClassifyError(as.character(levinTenXRes_prob70_ensemble$testRes$inDrops$pearson_WKNN_limma$predRes), levinPBMCbenchmark_inDrops$CellType2, levinPBMCbenchmark_10x$CellType2)),
+                                     dropSeqs = freqError(ClassifyError(as.character(levinTenXRes_prob70_ensemble$testRes$dropSeqs$pearson_WKNN_limma$predRes), levinPBMCbenchmark_dropSeqs$CellType2, levinPBMCbenchmark_10x$CellType2)))
+
+```
+
+
+
+
+```{r}
+
+
+levinTenXV2_ensemble_error <- lapply(levinTenXV2Res_prob70_ensemble$testRes, getEnsembleError)
+
+
+TenXV2_ensemble_acc_train <- levinTenXV2_ensemble_error$tenXV2[,1] + levinTenXV2_ensemble_error$tenXV2[,2]
+
+
+
+levinTenXV2Res_ensemble_res_weights <- lapply(levinTenXV2Res_prob70_ensemble$testRes, function(x) 
+  getEnsembleRes(x, 
+                 exclude = c("_KNN"),
+                 weight = alpha(1 - TenXV2_ensemble_acc_train)))
+
+
+
+TenXV2_ensemble_res_final_weights <- rbind(smartseq = freqError(ClassifyError(as.character(levinTenXV2Res_ensemble_res_weights$smartseq$cellTypes), levinPBMCbenchmark_smartSeq$CellType2, levinPBMCbenchmark_10xV2$CellType2)),
+                                           celSeq = freqError(ClassifyError(as.character(levinTenXV2Res_ensemble_res_weights$celSeq$cellTypes), levinPBMCbenchmark_celSeq$CellType2, levinPBMCbenchmark_10xV2$CellType2)),
+                                           tenX = freqError(ClassifyError(as.character(levinTenXV2Res_ensemble_res_weights$tenX$cellTypes), levinPBMCbenchmark_10x$CellType2, levinPBMCbenchmark_10xV2$CellType2)),
+                                           tenXV2 = freqError(ClassifyError(as.character(levinTenXV2Res_ensemble_res_weights$tenXV2$cellTypes), levinPBMCbenchmark_10xV2$CellType2, levinPBMCbenchmark_10xV2$CellType2)),
+                                           seqWells = freqError(ClassifyError(as.character(levinTenXV2Res_ensemble_res_weights$seqWells$cellTypes[-idx_seqWell_filtered]), levinPBMCbenchmark_seqWells$CellType2[-idx_seqWell_filtered], levinPBMCbenchmark_10xV2$CellType2)),
+                                           inDrops = freqError(ClassifyError(as.character(levinTenXV2Res_ensemble_res_weights$inDrops$cellTypes), levinPBMCbenchmark_inDrops$CellType2, levinPBMCbenchmark_10xV2$CellType2)),
+                                           dropSeqs = freqError(ClassifyError(as.character(levinTenXV2Res_ensemble_res_weights$dropSeqs$cellTypes), levinPBMCbenchmark_dropSeqs$CellType2, levinPBMCbenchmark_10xV2$CellType2)))
+
+TenXV2_scClassify_res_pearson <- rbind(smartseq = freqError(ClassifyError(as.character(levinTenXV2Res_prob70_ensemble$testRes$smartseq$pearson_WKNN_limma$predRes), levinPBMCbenchmark_smartSeq$CellType2, levinPBMCbenchmark_10xV2$CellType2)),
+                                       celSeq = freqError(ClassifyError(as.character(levinTenXV2Res_prob70_ensemble$testRes$celSeq$pearson_WKNN_limma$predRes), levinPBMCbenchmark_celSeq$CellType2, levinPBMCbenchmark_10xV2$CellType2)),
+                                       tenX = freqError(ClassifyError(as.character(levinTenXV2Res_prob70_ensemble$testRes$tenX$pearson_WKNN_limma$predRes), levinPBMCbenchmark_10x$CellType2, levinPBMCbenchmark_10xV2$CellType2)),
+                                       tenXV2 = freqError(ClassifyError(as.character(levinTenXV2Res_prob70_ensemble$testRes$tenXV2$pearson_WKNN_limma$predRes), levinPBMCbenchmark_10xV2$CellType2, levinPBMCbenchmark_10xV2$CellType2)),
+                                       seqWells = freqError(ClassifyError(as.character(levinTenXV2Res_prob70_ensemble$testRes$seqWells$pearson_WKNN_limma$predRes[-idx_seqWell_filtered]), levinPBMCbenchmark_seqWells$CellType2[-idx_seqWell_filtered], levinPBMCbenchmark_10xV2$CellType2)),
+                                       inDrops = freqError(ClassifyError(as.character(levinTenXV2Res_prob70_ensemble$testRes$inDrops$pearson_WKNN_limma$predRes), levinPBMCbenchmark_inDrops$CellType2, levinPBMCbenchmark_10xV2$CellType2)),
+                                       dropSeqs = freqError(ClassifyError(as.character(levinTenXV2Res_prob70_ensemble$testRes$dropSeqs$pearson_WKNN_limma$predRes), levinPBMCbenchmark_dropSeqs$CellType2, levinPBMCbenchmark_10xV2$CellType2)))
+
+```
+
+
+
+
+
+
+```{r}
+
+levinDropSeqs_ensemble_error <- lapply(levinDropSeqsRes_prob70_ensemble$testRes, getEnsembleError)
+
+
+
+DropSeqs_ensemble_acc_train <- levinDropSeqs_ensemble_error$dropSeqs[,1] + levinDropSeqs_ensemble_error$dropSeqs[,2]
+
+
+
+levinDropSeqsRes_ensemble_res_weights <- lapply(levinDropSeqsRes_prob70_ensemble$testRes, function(x) 
+  getEnsembleRes(x, 
+                 exclude = c("_KNN"),
+                 weight = alpha(1 - DropSeqs_ensemble_acc_train)))
+
+
+DropSeqs_ensemble_res_final_weights <- rbind(smartseq = freqError(ClassifyError(as.character(levinDropSeqsRes_ensemble_res_weights$smartseq$cellTypes), levinPBMCbenchmark_smartSeq$CellType2, levinPBMCbenchmark_dropSeqs$CellType2)),
+                                             celSeq = freqError(ClassifyError(as.character(levinDropSeqsRes_ensemble_res_weights$celSeq$cellTypes), levinPBMCbenchmark_celSeq$CellType2, levinPBMCbenchmark_dropSeqs$CellType2)),
+                                             tenX = freqError(ClassifyError(as.character(levinDropSeqsRes_ensemble_res_weights$tenX$cellTypes), levinPBMCbenchmark_10x$CellType2, levinPBMCbenchmark_dropSeqs$CellType2)),
+                                             tenXV2 = freqError(ClassifyError(as.character(levinDropSeqsRes_ensemble_res_weights$tenXV2$cellTypes), levinPBMCbenchmark_10xV2$CellType2, levinPBMCbenchmark_dropSeqs$CellType2)),
+                                             seqWells = freqError(ClassifyError(as.character(levinDropSeqsRes_ensemble_res_weights$seqWells$cellTypes), levinPBMCbenchmark_seqWells$CellType2[-idx_seqWell_filtered], levinPBMCbenchmark_dropSeqs$CellType2)),
+                                             inDrops = freqError(ClassifyError(as.character(levinDropSeqsRes_ensemble_res_weights$inDrops$cellTypes), levinPBMCbenchmark_inDrops$CellType2, levinPBMCbenchmark_dropSeqs$CellType2)),
+                                             dropSeqs = freqError(ClassifyError(as.character(levinDropSeqsRes_ensemble_res_weights$dropSeqs$cellTypes), levinPBMCbenchmark_dropSeqs$CellType2, levinPBMCbenchmark_dropSeqs$CellType2)))
+
+DropSeqs_scClassify_res_pearson <- rbind(smartseq = freqError(ClassifyError(as.character(levinDropSeqsRes_prob70_ensemble$testRes$smartseq$pearson_WKNN_limma$predRes), levinPBMCbenchmark_smartSeq$CellType2, levinPBMCbenchmark_dropSeqs$CellType2)),
+                                         celSeq = freqError(ClassifyError(as.character(levinDropSeqsRes_prob70_ensemble$testRes$celSeq$pearson_WKNN_limma$predRes), levinPBMCbenchmark_celSeq$CellType2, levinPBMCbenchmark_dropSeqs$CellType2)),
+                                         tenX = freqError(ClassifyError(as.character(levinDropSeqsRes_prob70_ensemble$testRes$tenX$pearson_WKNN_limma$predRes), levinPBMCbenchmark_10x$CellType2, levinPBMCbenchmark_dropSeqs$CellType2)),
+                                         tenXV2 = freqError(ClassifyError(as.character(levinDropSeqsRes_prob70_ensemble$testRes$tenXV2$pearson_WKNN_limma$predRes), levinPBMCbenchmark_10xV2$CellType2, levinPBMCbenchmark_dropSeqs$CellType2)),
+                                         seqWells = freqError(ClassifyError(as.character(levinDropSeqsRes_prob70_ensemble$testRes$seqWells$pearson_WKNN_limma$predRes), levinPBMCbenchmark_seqWells$CellType2[-idx_seqWell_filtered], levinPBMCbenchmark_dropSeqs$CellType2)),
+                                         inDrops = freqError(ClassifyError(as.character(levinDropSeqsRes_prob70_ensemble$testRes$inDrops$pearson_WKNN_limma$predRes), levinPBMCbenchmark_inDrops$CellType2, levinPBMCbenchmark_dropSeqs$CellType2)),
+                                         dropSeqs = freqError(ClassifyError(as.character(levinDropSeqsRes_prob70_ensemble$testRes$dropSeqs$pearson_WKNN_limma$predRes), levinPBMCbenchmark_dropSeqs$CellType2, levinPBMCbenchmark_dropSeqs$CellType2)))
+
+```
+
+
+
+```{r}
+
+
+ensemble_res_final_weights <- rbind(SmartSeq_ensemble_res_final_weights,
+                                    CelSeq_ensemble_res_final_weights,
+                                    TenX_ensemble_res_final_weights,
+                                    TenXV2_ensemble_res_final_weights,
+                                    SeqWells_ensemble_res_final_weights,
+                                    InDrops_ensemble_res_final_weights,
+                                    DropSeqs_ensemble_res_final_weights)
+
+
+rownames(ensemble_res_final_weights) <- paste(c(rep("smartSeq", 7),
+                                                rep("celSeq", 7),
+                                                rep("tenX", 7), 
+                                                rep("tenXV2", 7),
+                                                rep("seqWells", 7),
+                                                rep("inDrops", 7),
+                                                rep("dropSeqs", 7)), rownames(ensemble_res_final_weights), sep = "_")
+
+ensemble_res_final_weights <- ensemble_res_final_weights[unlist(lapply(strsplit(rownames(ensemble_res_final_weights), "_"), function(x) tolower(x[1]) != tolower(x[2]))),]
+
+saveRDS(ensemble_res_final_weights, 
+        file = "results/levinPBMC_scClassifyRes_EnsembleWeighted.rds")
+
+
+
+scClassify_res_pearson <- rbind(SmartSeq_scClassify_res_pearson,
+                                CelSeq_scClassify_res_pearson,
+                                TenX_scClassify_res_pearson,
+                                TenXV2_scClassify_res_pearson,
+                                SeqWells_scClassify_res_pearson,
+                                InDrops_scClassify_res_pearson,
+                                DropSeqs_scClassify_res_pearson)
+
+
+rownames(scClassify_res_pearson) <- paste(c(rep("smartSeq", 7),
+                                            rep("celSeq", 7),
+                                            rep("tenX", 7), 
+                                            rep("tenXV2", 7),
+                                            rep("seqWells", 7),
+                                            rep("inDrops", 7),
+                                            rep("dropSeqs", 7)), rownames(scClassify_res_pearson), sep = "_")
+
+
+scClassify_res_pearson <- scClassify_res_pearson[unlist(lapply(strsplit(rownames(scClassify_res_pearson), "_"), function(x) tolower(x[1]) != tolower(x[2]))),]
+
+save(scClassify_res_pearson, 
+     file = "results/levinPBMC_scClassifyRes_pearsonDE.rds")
+
+
+```
+
+
+
+# Level 2
+
+
+
+```{r}
+levinCelSeqRes_prob70_ensemble_level2 <- readRDS("ensembleRes/levinCelSeqRes_prob70_ensemble_level2.rds")
+levinSmartSeqRes_prob70_ensemble_level2 <- readRDS("ensembleRes/levinSmartSeqRes_prob70_ensemble_level2.rds")
+levinInDropsRes_prob70_ensemble_level2 <- readRDS("ensembleRes/levinInDropsRes_prob70_ensemble_level2.rds")
+levinSeqWellsRes_prob70_ensemble_level2 <- readRDS("ensembleRes/levinSeqWellsRes_prob70_ensemble_level2.rds")
+levinTenXRes_prob70_ensemble_level2 <- readRDS("ensembleRes/levinTenXRes_prob70_ensemble_level2.rds")
+levinTenXV2Res_prob70_ensemble_level2 <- readRDS("ensembleRes/levinTenXV2Res_prob70_ensemble_level2.rds")
+levinDropSeqsRes_prob70_ensemble_level2 <- readRDS("ensembleRes/levinDropSeqsRes_prob70_ensemble_level2.rds")
+
+idx_seqWell_filtered <- which(levinPBMCbenchmark_seqWells$CellType2 == "Unassigned")
+```
+
+
+
+
+
+
+```{r}
+
+levinCelSeq_ensemble_level2_error <- lapply(levinCelSeqRes_prob70_ensemble_level2$testRes, getEnsembleError)
+
+celSeq_ensemble_level2_acc_train <- levinCelSeq_ensemble_level2_error$celSeq[,1] + levinCelSeq_ensemble_level2_error$celSeq[,2]
+
+levinCelSeqRes_ensemble_level2_res_weights <- lapply(levinCelSeqRes_prob70_ensemble_level2$testRes, function(x) 
+  getEnsembleRes(x, 
+                 exclude = c( "_KNN"),
+                 weight = alpha(1 - celSeq_ensemble_level2_acc_train)))
+
+
+
+
+CelSeq_ensemble_level2_res_final_weights <- rbind(smartSeq = freqError(ClassifyError(as.character(levinCelSeqRes_ensemble_level2_res_weights$smartseq$cellTypes), levinPBMCbenchmark_smartSeq$CellType, levinPBMCbenchmark_celSeq$CellType)),
+                                                  celSeq = freqError(ClassifyError(as.character(levinCelSeqRes_ensemble_level2_res_weights$celSeq$cellTypes), levinPBMCbenchmark_celSeq$CellType, levinPBMCbenchmark_celSeq$CellType)),
+                                                  tenX = freqError(ClassifyError(as.character(levinCelSeqRes_ensemble_level2_res_weights$tenX$cellTypes), levinPBMCbenchmark_10x$CellType, levinPBMCbenchmark_celSeq$CellType)),
+                                                  tenXV2 = freqError(ClassifyError(as.character(levinCelSeqRes_ensemble_level2_res_weights$tenXV2$cellTypes), levinPBMCbenchmark_10xV2$CellType, levinPBMCbenchmark_celSeq$CellType)),
+                                                  seqWells = freqError(ClassifyError(as.character(levinCelSeqRes_ensemble_level2_res_weights$seqWells$cellTypes), levinPBMCbenchmark_seqWells$CellType[-idx_seqWell_filtered], levinPBMCbenchmark_celSeq$CellType)),
+                                                  inDrops = freqError(ClassifyError(as.character(levinCelSeqRes_ensemble_level2_res_weights$inDrops$cellTypes), levinPBMCbenchmark_inDrops$CellType, levinPBMCbenchmark_celSeq$CellType)),
+                                                  dropSeqs = freqError(ClassifyError(as.character(levinCelSeqRes_ensemble_level2_res_weights$dropSeqs$cellTypes), levinPBMCbenchmark_dropSeqs$CellType, levinPBMCbenchmark_celSeq$CellType)))
+
+
+
+CelSeq_scClassify_res_pearson_level2 <- rbind(smartSeq = freqError(ClassifyError(as.character(levinCelSeqRes_prob70_ensemble_level2$testRes$smartseq$pearson_WKNN_limma$predRes), levinPBMCbenchmark_smartSeq$CellType, levinPBMCbenchmark_celSeq$CellType)),
+                                              celSeq = freqError(ClassifyError(as.character(levinCelSeqRes_prob70_ensemble_level2$testRes$celSeq$pearson_WKNN_limma$predRes), levinPBMCbenchmark_celSeq$CellType, levinPBMCbenchmark_celSeq$CellType)),
+                                              tenX = freqError(ClassifyError(as.character(levinCelSeqRes_prob70_ensemble_level2$testRes$tenX$pearson_WKNN_limma$predRes), levinPBMCbenchmark_10x$CellType, levinPBMCbenchmark_celSeq$CellType)),
+                                              tenXV2 = freqError(ClassifyError(as.character(levinCelSeqRes_prob70_ensemble_level2$testRes$tenXV2$pearson_WKNN_limma$predRes), levinPBMCbenchmark_10xV2$CellType, levinPBMCbenchmark_celSeq$CellType)),
+                                              seqWells = freqError(ClassifyError(as.character(levinCelSeqRes_prob70_ensemble_level2$testRes$seqWells$pearson_WKNN_limma$predRes), levinPBMCbenchmark_seqWells$CellType[-idx_seqWell_filtered], levinPBMCbenchmark_celSeq$CellType)),
+                                              inDrops = freqError(ClassifyError(as.character(levinCelSeqRes_prob70_ensemble_level2$testRes$inDrops$pearson_WKNN_limma$predRes), levinPBMCbenchmark_inDrops$CellType, levinPBMCbenchmark_celSeq$CellType)),
+                                              dropSeqs = freqError(ClassifyError(as.character(levinCelSeqRes_prob70_ensemble_level2$testRes$dropSeqs$pearson_WKNN_limma$predRes), levinPBMCbenchmark_dropSeqs$CellType, levinPBMCbenchmark_celSeq$CellType)))
+
+
+
+```
+
+
+
+
+
+
+```{r}
+
+
+levinSmartSeq_ensemble_level2_error <- lapply(levinSmartSeqRes_prob70_ensemble_level2$testRes, getEnsembleError)
+
+
+SmartSeq_ensemble_level2_acc_train <- levinSmartSeq_ensemble_level2_error$smartseq[,1] + levinSmartSeq_ensemble_level2_error$smartseq[,2]
+
+
+
+# keep <- !grepl(c("manhattan", "DV", "BI"), names(lawlor_ensemble_level2_acc_train))
+levinSmartSeqRes_ensemble_level2_res_weights <- lapply(levinSmartSeqRes_prob70_ensemble_level2$testRes, function(x) 
+  getEnsembleRes(x, 
+                 exclude = c( "_KNN"),
+                 weight = alpha(1 - SmartSeq_ensemble_level2_acc_train)))
+
+
+SmartSeq_ensemble_level2_res_final_weights <- rbind(smartSeq = freqError(ClassifyError(as.character(levinSmartSeqRes_ensemble_level2_res_weights$smartseq$cellTypes), levinPBMCbenchmark_smartSeq$CellType, levinPBMCbenchmark_smartSeq$CellType)),
+                                                    celSeq = freqError(ClassifyError(as.character(levinSmartSeqRes_ensemble_level2_res_weights$celSeq$cellTypes), levinPBMCbenchmark_celSeq$CellType, levinPBMCbenchmark_smartSeq$CellType)),
+                                                    tenX = freqError(ClassifyError(as.character(levinSmartSeqRes_ensemble_level2_res_weights$tenX$cellTypes), levinPBMCbenchmark_10x$CellType, levinPBMCbenchmark_smartSeq$CellType)),
+                                                    tenXV2 = freqError(ClassifyError(as.character(levinSmartSeqRes_ensemble_level2_res_weights$tenXV2$cellTypes), levinPBMCbenchmark_10xV2$CellType, levinPBMCbenchmark_smartSeq$CellType)),
+                                                    seqWells = freqError(ClassifyError(as.character(levinSmartSeqRes_ensemble_level2_res_weights$seqWells$cellTypes), levinPBMCbenchmark_seqWells$CellType[-idx_seqWell_filtered], levinPBMCbenchmark_smartSeq$CellType)),
+                                                    inDrops = freqError(ClassifyError(as.character(levinSmartSeqRes_ensemble_level2_res_weights$inDrops$cellTypes), levinPBMCbenchmark_inDrops$CellType, levinPBMCbenchmark_smartSeq$CellType)),
+                                                    dropSeqs = freqError(ClassifyError(as.character(levinSmartSeqRes_ensemble_level2_res_weights$dropSeqs$cellTypes), levinPBMCbenchmark_dropSeqs$CellType, levinPBMCbenchmark_smartSeq$CellType)))
+
+
+
+
+
+SmartSeq_scClassify_res_pearson_level2 <- rbind(smartSeq = freqError(ClassifyError(as.character(levinSmartSeqRes_prob70_ensemble_level2$testRes$smartseq$pearson_WKNN_limma$predRes), levinPBMCbenchmark_smartSeq$CellType, levinPBMCbenchmark_smartSeq$CellType)),
+                                                celSeq = freqError(ClassifyError(as.character(levinSmartSeqRes_prob70_ensemble_level2$testRes$celSeq$pearson_WKNN_limma$predRes), levinPBMCbenchmark_celSeq$CellType, levinPBMCbenchmark_smartSeq$CellType)),
+                                                tenX = freqError(ClassifyError(as.character(levinSmartSeqRes_prob70_ensemble_level2$testRes$tenX$pearson_WKNN_limma$predRes), levinPBMCbenchmark_10x$CellType, levinPBMCbenchmark_smartSeq$CellType)),
+                                                tenXV2 = freqError(ClassifyError(as.character(levinSmartSeqRes_prob70_ensemble_level2$testRes$tenXV2$pearson_WKNN_limma$predRes), levinPBMCbenchmark_10xV2$CellType, levinPBMCbenchmark_smartSeq$CellType)),
+                                                seqWells = freqError(ClassifyError(as.character(levinSmartSeqRes_prob70_ensemble_level2$testRes$seqWells$pearson_WKNN_limma$predRes), levinPBMCbenchmark_seqWells$CellType[-idx_seqWell_filtered], levinPBMCbenchmark_smartSeq$CellType)),
+                                                inDrops = freqError(ClassifyError(as.character(levinSmartSeqRes_prob70_ensemble_level2$testRes$inDrops$pearson_WKNN_limma$predRes), levinPBMCbenchmark_inDrops$CellType, levinPBMCbenchmark_smartSeq$CellType)),
+                                                dropSeqs = freqError(ClassifyError(as.character(levinSmartSeqRes_prob70_ensemble_level2$testRes$dropSeqs$pearson_WKNN_limma$predRes), levinPBMCbenchmark_dropSeqs$CellType, levinPBMCbenchmark_smartSeq$CellType)))
+```
+
+
+
+
+
+
+
+```{r}
+
+
+levinInDrops_ensemble_level2_error <- lapply(levinInDropsRes_prob70_ensemble_level2$testRes, getEnsembleError)
+
+
+InDrops_ensemble_level2_acc_train <- levinInDrops_ensemble_level2_error$inDrops[,1] + levinInDrops_ensemble_level2_error$inDrops[,2]
+
+
+
+levinInDropsRes_ensemble_level2_res_weights <- lapply(levinInDropsRes_prob70_ensemble_level2$testRes, function(x) 
+  getEnsembleRes(x, 
+                 exclude = c("_KNN"),
+                 weight = alpha(1 - InDrops_ensemble_level2_acc_train)))
+
+
+
+InDrops_ensemble_level2_res_final_weights <- rbind(smartseq = freqError(ClassifyError(as.character(levinInDropsRes_ensemble_level2_res_weights$smartseq$cellTypes), levinPBMCbenchmark_smartSeq$CellType, levinPBMCbenchmark_inDrops$CellType)),
+                                                   celSeq = freqError(ClassifyError(as.character(levinInDropsRes_ensemble_level2_res_weights$celSeq$cellTypes), levinPBMCbenchmark_celSeq$CellType, levinPBMCbenchmark_inDrops$CellType)),
+                                                   tenX = freqError(ClassifyError(as.character(levinInDropsRes_ensemble_level2_res_weights$tenX$cellTypes), levinPBMCbenchmark_10x$CellType, levinPBMCbenchmark_inDrops$CellType)),
+                                                   tenXV2 = freqError(ClassifyError(as.character(levinInDropsRes_ensemble_level2_res_weights$tenXV2$cellTypes), levinPBMCbenchmark_10xV2$CellType, levinPBMCbenchmark_inDrops$CellType)),
+                                                   seqWells = freqError(ClassifyError(as.character(levinInDropsRes_ensemble_level2_res_weights$seqWells$cellTypes)[-idx_seqWell_filtered], levinPBMCbenchmark_seqWells$CellType[-idx_seqWell_filtered], levinPBMCbenchmark_inDrops$CellType)),
+                                                   inDrops = freqError(ClassifyError(as.character(levinInDropsRes_ensemble_level2_res_weights$inDrops$cellTypes), levinPBMCbenchmark_inDrops$CellType, levinPBMCbenchmark_inDrops$CellType)),
+                                                   dropSeqs = freqError(ClassifyError(as.character(levinInDropsRes_ensemble_level2_res_weights$dropSeqs$cellTypes), levinPBMCbenchmark_dropSeqs$CellType, levinPBMCbenchmark_inDrops$CellType)))
+
+
+
+
+InDrops_scClassify_res_pearson_level2 <- rbind(smartseq = freqError(ClassifyError(as.character(levinInDropsRes_prob70_ensemble_level2$testRes$smartseq$pearson_WKNN_limma$predRes), levinPBMCbenchmark_smartSeq$CellType, levinPBMCbenchmark_inDrops$CellType)),
+                                               celSeq = freqError(ClassifyError(as.character(levinInDropsRes_prob70_ensemble_level2$testRes$celSeq$pearson_WKNN_limma$predRes), levinPBMCbenchmark_celSeq$CellType, levinPBMCbenchmark_inDrops$CellType)),
+                                               tenX = freqError(ClassifyError(as.character(levinInDropsRes_prob70_ensemble_level2$testRes$tenX$pearson_WKNN_limma$predRes), levinPBMCbenchmark_10x$CellType, levinPBMCbenchmark_inDrops$CellType)),
+                                               tenXV2 = freqError(ClassifyError(as.character(levinInDropsRes_prob70_ensemble_level2$testRes$tenXV2$pearson_WKNN_limma$predRes), levinPBMCbenchmark_10xV2$CellType, levinPBMCbenchmark_inDrops$CellType)),
+                                               seqWells = freqError(ClassifyError(as.character(levinInDropsRes_prob70_ensemble_level2$testRes$seqWells$pearson_WKNN_limma$predRes)[-idx_seqWell_filtered], levinPBMCbenchmark_seqWells$CellType[-idx_seqWell_filtered], levinPBMCbenchmark_inDrops$CellType)),
+                                               inDrops = freqError(ClassifyError(as.character(levinInDropsRes_prob70_ensemble_level2$testRes$inDrops$pearson_WKNN_limma$predRes), levinPBMCbenchmark_inDrops$CellType, levinPBMCbenchmark_inDrops$CellType)),
+                                               dropSeqs = freqError(ClassifyError(as.character(levinInDropsRes_prob70_ensemble_level2$testRes$dropSeqs$pearson_WKNN_limma$predRes), levinPBMCbenchmark_dropSeqs$CellType, levinPBMCbenchmark_inDrops$CellType)))
+```
+
+
+
+```{r}
+
+levinSeqWells_ensemble_level2_error <- lapply(levinSeqWellsRes_prob70_ensemble_level2$testRes, getEnsembleError)
+
+
+SeqWells_ensemble_level2_acc_train <- levinSeqWells_ensemble_level2_error$seqWells[,1] + levinSeqWells_ensemble_level2_error$seqWells[,2]
+
+
+# keep <- !grepl(c("manhattan", "DV", "BI"), names(lawlor_ensemble_level2_acc_train))
+levinSeqWellsRes_ensemble_level2_res_weights <- lapply(levinSeqWellsRes_prob70_ensemble_level2$testRes, function(x) 
+  getEnsembleRes(x, 
+                 exclude = c("_KNN"),
+                 weight = alpha(1 - SeqWells_ensemble_level2_acc_train)))
+
+
+SeqWells_ensemble_level2_res_final_weights <- rbind(smartseq = freqError(ClassifyError(as.character(levinSeqWellsRes_ensemble_level2_res_weights$smartseq$cellTypes), levinPBMCbenchmark_smartSeq$CellType, levinPBMCbenchmark_seqWells$CellType)),
+                                                    celSeq = freqError(ClassifyError(as.character(levinSeqWellsRes_ensemble_level2_res_weights$celSeq$cellTypes), levinPBMCbenchmark_celSeq$CellType, levinPBMCbenchmark_seqWells$CellType)),
+                                                    tenX = freqError(ClassifyError(as.character(levinSeqWellsRes_ensemble_level2_res_weights$tenX$cellTypes), levinPBMCbenchmark_10x$CellType, levinPBMCbenchmark_seqWells$CellType)),
+                                                    tenXV2 = freqError(ClassifyError(as.character(levinSeqWellsRes_ensemble_level2_res_weights$tenXV2$cellTypes), levinPBMCbenchmark_10xV2$CellType, levinPBMCbenchmark_seqWells$CellType)),
+                                                    seqWells = freqError(ClassifyError(as.character(levinSeqWellsRes_ensemble_level2_res_weights$seqWells$cellTypes)[-idx_seqWell_filtered], levinPBMCbenchmark_seqWells$CellType[-idx_seqWell_filtered], levinPBMCbenchmark_seqWells$CellType)),
+                                                    inDrops = freqError(ClassifyError(as.character(levinSeqWellsRes_ensemble_level2_res_weights$inDrops$cellTypes), levinPBMCbenchmark_inDrops$CellType, levinPBMCbenchmark_seqWells$CellType)),
+                                                    dropSeqs = freqError(ClassifyError(as.character(levinSeqWellsRes_ensemble_level2_res_weights$dropSeqs$cellTypes), levinPBMCbenchmark_dropSeqs$CellType, levinPBMCbenchmark_seqWells$CellType)))
+
+
+
+SeqWells_scClassify_res_pearson_level2 <- rbind(smartseq = freqError(ClassifyError(as.character(levinSeqWellsRes_prob70_ensemble_level2$testRes$smartseq$pearson_WKNN_limma$predRes), levinPBMCbenchmark_smartSeq$CellType, levinPBMCbenchmark_seqWells$CellType)),
+                                                celSeq = freqError(ClassifyError(as.character(levinSeqWellsRes_prob70_ensemble_level2$testRes$celSeq$pearson_WKNN_limma$predRes), levinPBMCbenchmark_celSeq$CellType, levinPBMCbenchmark_seqWells$CellType)),
+                                                tenX = freqError(ClassifyError(as.character(levinSeqWellsRes_prob70_ensemble_level2$testRes$tenX$pearson_WKNN_limma$predRes), levinPBMCbenchmark_10x$CellType, levinPBMCbenchmark_seqWells$CellType)),
+                                                tenXV2 = freqError(ClassifyError(as.character(levinSeqWellsRes_prob70_ensemble_level2$testRes$tenXV2$pearson_WKNN_limma$predRes), levinPBMCbenchmark_10xV2$CellType, levinPBMCbenchmark_seqWells$CellType)),
+                                                seqWells = freqError(ClassifyError(as.character(levinSeqWellsRes_prob70_ensemble_level2$testRes$seqWells$pearson_WKNN_limma$predRes)[-idx_seqWell_filtered], levinPBMCbenchmark_seqWells$CellType[-idx_seqWell_filtered], levinPBMCbenchmark_seqWells$CellType)),
+                                                inDrops = freqError(ClassifyError(as.character(levinSeqWellsRes_prob70_ensemble_level2$testRes$inDrops$pearson_WKNN_limma$predRes), levinPBMCbenchmark_inDrops$CellType, levinPBMCbenchmark_seqWells$CellType)),
+                                                dropSeqs = freqError(ClassifyError(as.character(levinSeqWellsRes_prob70_ensemble_level2$testRes$dropSeqs$pearson_WKNN_limma$predRes), levinPBMCbenchmark_dropSeqs$CellType, levinPBMCbenchmark_seqWells$CellType)))
+
+```
+
+
+
+
+
+```{r}
+
+levinTenX_ensemble_level2_error <- lapply(levinTenXRes_prob70_ensemble_level2$testRes, getEnsembleError)
+
+
+TenX_ensemble_level2_acc_train <- levinTenX_ensemble_level2_error$tenX[,1] + levinTenX_ensemble_level2_error$tenX[,2]
+
+
+levinTenXRes_ensemble_level2_res_weights <- lapply(levinTenXRes_prob70_ensemble_level2$testRes, function(x) 
+  getEnsembleRes(x, 
+                 exclude = c("_KNN"),
+                 weight = alpha(1 - TenX_ensemble_level2_acc_train)))
+
+
+
+TenX_ensemble_level2_res_final_weights <- rbind(smartseq = freqError(ClassifyError(as.character(levinTenXRes_ensemble_level2_res_weights$smartseq$cellTypes), levinPBMCbenchmark_smartSeq$CellType, levinPBMCbenchmark_10x$CellType)),
+                                                celSeq = freqError(ClassifyError(as.character(levinTenXRes_ensemble_level2_res_weights$celSeq$cellTypes), levinPBMCbenchmark_celSeq$CellType, levinPBMCbenchmark_10x$CellType)),
+                                                tenX = freqError(ClassifyError(as.character(levinTenXRes_ensemble_level2_res_weights$tenX$cellTypes), levinPBMCbenchmark_10x$CellType, levinPBMCbenchmark_10x$CellType)),
+                                                tenXV2 = freqError(ClassifyError(as.character(levinTenXRes_ensemble_level2_res_weights$tenXV2$cellTypes), levinPBMCbenchmark_10xV2$CellType, levinPBMCbenchmark_10x$CellType)),
+                                                seqWells = freqError(ClassifyError(as.character(levinTenXRes_ensemble_level2_res_weights$seqWells$cellTypes), levinPBMCbenchmark_seqWells$CellType[-idx_seqWell_filtered], levinPBMCbenchmark_10x$CellType)),
+                                                inDrops = freqError(ClassifyError(as.character(levinTenXRes_ensemble_level2_res_weights$inDrops$cellTypes), levinPBMCbenchmark_inDrops$CellType, levinPBMCbenchmark_10x$CellType)),
+                                                dropSeqs = freqError(ClassifyError(as.character(levinTenXRes_ensemble_level2_res_weights$dropSeqs$cellTypes), levinPBMCbenchmark_dropSeqs$CellType, levinPBMCbenchmark_10x$CellType)))
+
+
+
+TenX_scClassify_res_pearson_level2 <- rbind(smartseq = freqError(ClassifyError(as.character(levinTenXRes_prob70_ensemble_level2$testRes$smartseq$pearson_WKNN_limma$predRes), levinPBMCbenchmark_smartSeq$CellType, levinPBMCbenchmark_10x$CellType)),
+                                            celSeq = freqError(ClassifyError(as.character(levinTenXRes_prob70_ensemble_level2$testRes$celSeq$pearson_WKNN_limma$predRes), levinPBMCbenchmark_celSeq$CellType, levinPBMCbenchmark_10x$CellType)),
+                                            tenX = freqError(ClassifyError(as.character(levinTenXRes_prob70_ensemble_level2$testRes$tenX$pearson_WKNN_limma$predRes), levinPBMCbenchmark_10x$CellType, levinPBMCbenchmark_10x$CellType)),
+                                            tenXV2 = freqError(ClassifyError(as.character(levinTenXRes_prob70_ensemble_level2$testRes$tenXV2$pearson_WKNN_limma$predRes), levinPBMCbenchmark_10xV2$CellType, levinPBMCbenchmark_10x$CellType)),
+                                            seqWells = freqError(ClassifyError(as.character(levinTenXRes_prob70_ensemble_level2$testRes$seqWells$pearson_WKNN_limma$predRes), levinPBMCbenchmark_seqWells$CellType[-idx_seqWell_filtered], levinPBMCbenchmark_10x$CellType)),
+                                            inDrops = freqError(ClassifyError(as.character(levinTenXRes_prob70_ensemble_level2$testRes$inDrops$pearson_WKNN_limma$predRes), levinPBMCbenchmark_inDrops$CellType, levinPBMCbenchmark_10x$CellType)),
+                                            dropSeqs = freqError(ClassifyError(as.character(levinTenXRes_prob70_ensemble_level2$testRes$dropSeqs$pearson_WKNN_limma$predRes), levinPBMCbenchmark_dropSeqs$CellType, levinPBMCbenchmark_10x$CellType)))
+
+```
+
+
+
+
+```{r}
+
+
+levinTenXV2_ensemble_level2_error <- lapply(levinTenXV2Res_prob70_ensemble_level2$testRes, getEnsembleError)
+
+
+TenXV2_ensemble_level2_acc_train <- levinTenXV2_ensemble_level2_error$tenXV2[,1] + levinTenXV2_ensemble_level2_error$tenXV2[,2]
+
+
+levinTenXV2Res_ensemble_level2_res_weights <- lapply(levinTenXV2Res_prob70_ensemble_level2$testRes, function(x) 
+  getEnsembleRes(x, 
+                 exclude = c("_KNN"),
+                 weight = alpha(1 - TenXV2_ensemble_level2_acc_train)))
+
+
+
+TenXV2_ensemble_level2_res_final_weights <- rbind(smartseq = freqError(ClassifyError(as.character(levinTenXV2Res_ensemble_level2_res_weights$smartseq$cellTypes), levinPBMCbenchmark_smartSeq$CellType, levinPBMCbenchmark_10xV2$CellType)),
+                                                  celSeq = freqError(ClassifyError(as.character(levinTenXV2Res_ensemble_level2_res_weights$celSeq$cellTypes), levinPBMCbenchmark_celSeq$CellType, levinPBMCbenchmark_10xV2$CellType)),
+                                                  tenX = freqError(ClassifyError(as.character(levinTenXV2Res_ensemble_level2_res_weights$tenX$cellTypes), levinPBMCbenchmark_10x$CellType, levinPBMCbenchmark_10xV2$CellType)),
+                                                  tenXV2 = freqError(ClassifyError(as.character(levinTenXV2Res_ensemble_level2_res_weights$tenXV2$cellTypes), levinPBMCbenchmark_10xV2$CellType, levinPBMCbenchmark_10xV2$CellType)),
+                                                  seqWells = freqError(ClassifyError(as.character(levinTenXV2Res_ensemble_level2_res_weights$seqWells$cellTypes[-idx_seqWell_filtered]), levinPBMCbenchmark_seqWells$CellType[-idx_seqWell_filtered], levinPBMCbenchmark_10xV2$CellType)),
+                                                  inDrops = freqError(ClassifyError(as.character(levinTenXV2Res_ensemble_level2_res_weights$inDrops$cellTypes), levinPBMCbenchmark_inDrops$CellType, levinPBMCbenchmark_10xV2$CellType)),
+                                                  dropSeqs = freqError(ClassifyError(as.character(levinTenXV2Res_ensemble_level2_res_weights$dropSeqs$cellTypes), levinPBMCbenchmark_dropSeqs$CellType, levinPBMCbenchmark_10xV2$CellType)))
+
+TenXV2_scClassify_res_pearson_level2 <- rbind(smartseq = freqError(ClassifyError(as.character(levinTenXV2Res_prob70_ensemble_level2$testRes$smartseq$pearson_WKNN_limma$predRes), levinPBMCbenchmark_smartSeq$CellType, levinPBMCbenchmark_10xV2$CellType)),
+                                              celSeq = freqError(ClassifyError(as.character(levinTenXV2Res_prob70_ensemble_level2$testRes$celSeq$pearson_WKNN_limma$predRes), levinPBMCbenchmark_celSeq$CellType, levinPBMCbenchmark_10xV2$CellType)),
+                                              tenX = freqError(ClassifyError(as.character(levinTenXV2Res_prob70_ensemble_level2$testRes$tenX$pearson_WKNN_limma$predRes), levinPBMCbenchmark_10x$CellType, levinPBMCbenchmark_10xV2$CellType)),
+                                              tenXV2 = freqError(ClassifyError(as.character(levinTenXV2Res_prob70_ensemble_level2$testRes$tenXV2$pearson_WKNN_limma$predRes), levinPBMCbenchmark_10xV2$CellType, levinPBMCbenchmark_10xV2$CellType)),
+                                              seqWells = freqError(ClassifyError(as.character(levinTenXV2Res_prob70_ensemble_level2$testRes$seqWells$pearson_WKNN_limma$predRes[-idx_seqWell_filtered]), levinPBMCbenchmark_seqWells$CellType[-idx_seqWell_filtered], levinPBMCbenchmark_10xV2$CellType)),
+                                              inDrops = freqError(ClassifyError(as.character(levinTenXV2Res_prob70_ensemble_level2$testRes$inDrops$pearson_WKNN_limma$predRes), levinPBMCbenchmark_inDrops$CellType, levinPBMCbenchmark_10xV2$CellType)),
+                                              dropSeqs = freqError(ClassifyError(as.character(levinTenXV2Res_prob70_ensemble_level2$testRes$dropSeqs$pearson_WKNN_limma$predRes), levinPBMCbenchmark_dropSeqs$CellType, levinPBMCbenchmark_10xV2$CellType)))
+
+```
+
+
+
+
+
+
+```{r}
+
+levinDropSeqs_ensemble_level2_error <- lapply(levinDropSeqsRes_prob70_ensemble_level2$testRes, getEnsembleError)
+
+
+
+DropSeqs_ensemble_level2_acc_train <- levinDropSeqs_ensemble_level2_error$dropSeqs[,1] + levinDropSeqs_ensemble_level2_error$dropSeqs[,2]
+
+
+levinDropSeqsRes_ensemble_level2_res_weights <- lapply(levinDropSeqsRes_prob70_ensemble_level2$testRes, function(x) 
+  getEnsembleRes(x, 
+                 exclude = c("_KNN"),
+                 weight = alpha(1 - DropSeqs_ensemble_level2_acc_train)))
+
+
+DropSeqs_ensemble_level2_res_final_weights <- rbind(smartseq = freqError(ClassifyError(as.character(levinDropSeqsRes_ensemble_level2_res_weights$smartseq$cellTypes), levinPBMCbenchmark_smartSeq$CellType, levinPBMCbenchmark_dropSeqs$CellType)),
+                                                    celSeq = freqError(ClassifyError(as.character(levinDropSeqsRes_ensemble_level2_res_weights$celSeq$cellTypes), levinPBMCbenchmark_celSeq$CellType, levinPBMCbenchmark_dropSeqs$CellType)),
+                                                    tenX = freqError(ClassifyError(as.character(levinDropSeqsRes_ensemble_level2_res_weights$tenX$cellTypes), levinPBMCbenchmark_10x$CellType, levinPBMCbenchmark_dropSeqs$CellType)),
+                                                    tenXV2 = freqError(ClassifyError(as.character(levinDropSeqsRes_ensemble_level2_res_weights$tenXV2$cellTypes), levinPBMCbenchmark_10xV2$CellType, levinPBMCbenchmark_dropSeqs$CellType)),
+                                                    seqWells = freqError(ClassifyError(as.character(levinDropSeqsRes_ensemble_level2_res_weights$seqWells$cellTypes)[-idx_seqWell_filtered], levinPBMCbenchmark_seqWells$CellType[-idx_seqWell_filtered], levinPBMCbenchmark_dropSeqs$CellType)),
+                                                    inDrops = freqError(ClassifyError(as.character(levinDropSeqsRes_ensemble_level2_res_weights$inDrops$cellTypes), levinPBMCbenchmark_inDrops$CellType, levinPBMCbenchmark_dropSeqs$CellType)),
+                                                    dropSeqs = freqError(ClassifyError(as.character(levinDropSeqsRes_ensemble_level2_res_weights$dropSeqs$cellTypes), levinPBMCbenchmark_dropSeqs$CellType, levinPBMCbenchmark_dropSeqs$CellType)))
+
+DropSeqs_scClassify_res_pearson_level2 <- rbind(smartseq = freqError(ClassifyError(as.character(levinDropSeqsRes_prob70_ensemble_level2$testRes$smartseq$pearson_WKNN_limma$predRes), levinPBMCbenchmark_smartSeq$CellType, levinPBMCbenchmark_dropSeqs$CellType)),
+                                                celSeq = freqError(ClassifyError(as.character(levinDropSeqsRes_prob70_ensemble_level2$testRes$celSeq$pearson_WKNN_limma$predRes), levinPBMCbenchmark_celSeq$CellType, levinPBMCbenchmark_dropSeqs$CellType)),
+                                                tenX = freqError(ClassifyError(as.character(levinDropSeqsRes_prob70_ensemble_level2$testRes$tenX$pearson_WKNN_limma$predRes), levinPBMCbenchmark_10x$CellType, levinPBMCbenchmark_dropSeqs$CellType)),
+                                                tenXV2 = freqError(ClassifyError(as.character(levinDropSeqsRes_prob70_ensemble_level2$testRes$tenXV2$pearson_WKNN_limma$predRes), levinPBMCbenchmark_10xV2$CellType, levinPBMCbenchmark_dropSeqs$CellType)),
+                                                seqWells = freqError(ClassifyError(as.character(levinDropSeqsRes_prob70_ensemble_level2$testRes$seqWells$pearson_WKNN_limma$predRes)[-idx_seqWell_filtered], levinPBMCbenchmark_seqWells$CellType[-idx_seqWell_filtered], levinPBMCbenchmark_dropSeqs$CellType)),
+                                                inDrops = freqError(ClassifyError(as.character(levinDropSeqsRes_prob70_ensemble_level2$testRes$inDrops$pearson_WKNN_limma$predRes), levinPBMCbenchmark_inDrops$CellType, levinPBMCbenchmark_dropSeqs$CellType)),
+                                                dropSeqs = freqError(ClassifyError(as.character(levinDropSeqsRes_prob70_ensemble_level2$testRes$dropSeqs$pearson_WKNN_limma$predRes), levinPBMCbenchmark_dropSeqs$CellType, levinPBMCbenchmark_dropSeqs$CellType)))
+
+```
+
+
+
+```{r}
+
+
+ensemble_level2_res_final_weights <- rbind(SmartSeq_ensemble_level2_res_final_weights,
+                                           CelSeq_ensemble_level2_res_final_weights,
+                                           TenX_ensemble_level2_res_final_weights,
+                                           TenXV2_ensemble_level2_res_final_weights,
+                                           SeqWells_ensemble_level2_res_final_weights,
+                                           InDrops_ensemble_level2_res_final_weights,
+                                           DropSeqs_ensemble_level2_res_final_weights)
+
+
+rownames(ensemble_level2_res_final_weights) <- paste(c(rep("smartSeq", 7),
+                                                       rep("celSeq", 7),
+                                                       rep("tenX", 7), 
+                                                       rep("tenXV2", 7),
+                                                       rep("seqWells", 7),
+                                                       rep("inDrops", 7),
+                                                       rep("dropSeqs", 7)), rownames(ensemble_level2_res_final_weights), sep = "_")
+
+ensemble_level2_res_final_weights <- ensemble_level2_res_final_weights[unlist(lapply(strsplit(rownames(ensemble_level2_res_final_weights), "_"), function(x) tolower(x[1]) != tolower(x[2]))),]
+
+saveRDS(ensemble_level2_res_final_weights, 
+        file = "results/levinPBMC_scClassifyRes_ensemble_level2_Weighted.rds")
+
+
+
+scClassify_res_pearson_level2 <- rbind(SmartSeq_scClassify_res_pearson_level2,
+                                       CelSeq_scClassify_res_pearson_level2,
+                                       TenX_scClassify_res_pearson_level2,
+                                       TenXV2_scClassify_res_pearson_level2,
+                                       SeqWells_scClassify_res_pearson_level2,
+                                       InDrops_scClassify_res_pearson_level2,
+                                       DropSeqs_scClassify_res_pearson_level2)
+
+
+rownames(scClassify_res_pearson_level2) <- paste(c(rep("smartSeq", 7),
+                                                   rep("celSeq", 7),
+                                                   rep("tenX", 7), 
+                                                   rep("tenXV2", 7),
+                                                   rep("seqWells", 7),
+                                                   rep("inDrops", 7),
+                                                   rep("dropSeqs", 7)), rownames(scClassify_res_pearson_level2), sep = "_")
+
+
+scClassify_res_pearson_level2 <- scClassify_res_pearson_level2[unlist(lapply(strsplit(rownames(scClassify_res_pearson_level2), "_"), function(x) tolower(x[1]) != tolower(x[2]))),]
+
+save(scClassify_res_pearson_level2, 
+     file = "results/levinPBMC_scClassifyRes_level2_pearsonDE.rds")
+
+
+```
+
+
+# Joint classification
+
+
+
+```{r}
+trainSelf_accuracy <- readRDS("ensembleRes/trainSelf_accuracy.rds")
+
+do.call(rbind, lapply(trainSelf_accuracy, rowMeans))
+
+weights_model <- do.call(rbind, lapply(trainSelf_accuracy, rowMeans))[, "correct"]
+
+library(reshape2)
+df_acc <- melt(trainSelf_accuracy)
+
+# ggplot(df_acc[df_acc$Var1 == "correct", ], aes(x = L1, y = value, fill = L1)) +
+#   geom_boxplot() +
+#   scale_fill_brewer(palette = "Set1") +
+#   theme_bw()
+
+```
+
+## Smart-seq
+
+```{r}
+predSmart_res <- list(
+  celseq = levinCelSeqRes_ensemble_level2_res_weights$smartseq$cellTypes,
+  tenXv2 = levinTenXV2Res_ensemble_level2_res_weights$smartseq$cellTypes,
+  tenXv3 = levinTenXRes_ensemble_level2_res_weights$smartseq$cellTypes,
+  indrops = levinInDropsRes_ensemble_level2_res_weights$smartseq$cellTypes,
+  dropseq = levinDropSeqsRes_ensemble_level2_res_weights$smartseq$cellTypes,
+  seqwells = levinSeqWellsRes_ensemble_level2_res_weights$smartseq$cellTypes)
+predSmart_res <- lapply(predSmart_res, as.character)
+
+predSmart_res <- do.call(cbind, predSmart_res)
+
+predSmart_res <- apply(predSmart_res, 1, function(x) {
+  x <- strsplit(x, "_")
+  x <- lapply(x, sort)
+  x <- unlist(lapply(x, function(l) paste(l, collapse = "_")))
+})
+
+predSmart_res <- t(predSmart_res)
+predSmart_res_ensemble_level2_scores <- apply(predSmart_res, 1, function(x) {
+  resType <- unique(x)
+  tab <- table(x)
+  names(tab)[which.max(tab)]
+  
+  mat <-sapply(1:length(resType), function(i){
+    ifelse(x %in% resType[i], 1, 0)* weights_model[colnames(predSmart_res)]
+  })
+  
+  colnames(mat) <- resType
+  rownames(mat) <- names(x)
+  mat_colMeans <- colMeans(mat)
+  final <- names(mat_colMeans)[which.max(mat_colMeans)]
+  scores <- max(mat_colMeans)
+  scores 
+})
+
+predSmart_res_ensemble_level2 <- apply(predSmart_res, 1, function(x) {
+  resType <- unique(x)
+  tab <- table(x)
+  names(tab)[which.max(tab)]
+  
+  mat <-sapply(1:length(resType), function(i){
+    ifelse(x %in% resType[i], 1, 0)* weights_model[colnames(predSmart_res)]
+  })
+  
+  colnames(mat) <- resType
+  rownames(mat) <- names(x)
+  mat_colMeans <- colMeans(mat)
+  final <- names(mat_colMeans)[which.max(mat_colMeans)]
+  scores <- max(mat_colMeans)
+  final 
+})
+
+```
+
+
+## Cel-seq
+
+```{r}
+predCel_res <- list(
+  smartseq = levinSmartSeqRes_ensemble_level2_res_weights$celSeq$cellTypes,
+  tenXv2 = levinTenXV2Res_ensemble_level2_res_weights$celSeq$cellTypes,
+  tenXv3 = levinTenXRes_ensemble_level2_res_weights$celSeq$cellTypes,
+  indrops = levinInDropsRes_ensemble_level2_res_weights$celSeq$cellTypes,
+  dropseq = levinDropSeqsRes_ensemble_level2_res_weights$celSeq$cellTypes,
+  seqwells = levinSeqWellsRes_ensemble_level2_res_weights$celSeq$cellTypes)
+
+predCel_res <- lapply(predCel_res, as.character)
+predCel_res <- do.call(cbind, predCel_res)
+
+predCel_res <- apply(predCel_res, 1, function(x) {
+  x <- strsplit(x, "_")
+  x <- lapply(x, sort)
+  x <- unlist(lapply(x, function(l) paste(l, collapse = "_")))
+})
+predCel_res <- t(predCel_res)
+predCel_res_ensemble_level2_scores <- apply(predCel_res, 1, function(x) {
+  resType <- unique(x)
+  tab <- table(x)
+  names(tab)[which.max(tab)]
+  
+  mat <-sapply(1:length(resType), function(i){
+    ifelse(x %in% resType[i], 1, 0)* weights_model[colnames(predSmart_res)]
+  })
+  
+  colnames(mat) <- resType
+  rownames(mat) <- names(x)
+  mat_colMeans <- colMeans(mat)
+  final <- names(mat_colMeans)[which.max(mat_colMeans)]
+  scores <- max(mat_colMeans)
+  scores 
+})
+
+predCel_res_ensemble_level2 <- apply(predCel_res, 1, function(x) {
+  resType <- unique(x)
+  tab <- table(x)
+  names(tab)[which.max(tab)]
+  
+  mat <- sapply(1:length(resType), function(i){
+    ifelse(x %in% resType[i], 1, 0)* weights_model[colnames(predCel_res)]
+  })
+  
+  colnames(mat) <- resType
+  rownames(mat) <- names(x)
+  mat_colMeans <- colMeans(mat)
+  final <- names(mat_colMeans)[which.max(mat_colMeans)]
+  scores <- max(mat_colMeans)
+  final 
+})
+
+```
+
+
+
+## tenXv2
+
+```{r}
+predtenXV2_res <- list(
+  smartseq = levinSmartSeqRes_ensemble_level2_res_weights$tenXV2$cellTypes,
+  celseq = levinCelSeqRes_ensemble_level2_res_weights$tenXV2$cellTypes,
+  tenXv3 = levinTenXRes_ensemble_level2_res_weights$tenXV2$cellTypes,
+  indrops = levinInDropsRes_ensemble_level2_res_weights$tenXV2$cellTypes,
+  dropseq = levinDropSeqsRes_ensemble_level2_res_weights$tenXV2$cellTypes,
+  seqwells = levinSeqWellsRes_ensemble_level2_res_weights$tenXV2$cellTypes)
+predtenXV2_res <- lapply(predtenXV2_res, as.character)
+predtenXV2_res <- do.call(cbind, predtenXV2_res)
+
+predtenXV2_res <- apply(predtenXV2_res, 1, function(x) {
+  x <- strsplit(x, "_")
+  x <- lapply(x, sort)
+  x <- unlist(lapply(x, function(l) paste(l, collapse = "_")))
+})
+
+predtenXV2_res <- t(predtenXV2_res)
+predtenXV2_res_ensemble_level2_scores <- apply(predtenXV2_res, 1, function(x) {
+  resType <- unique(x)
+  tab <- table(x)
+  names(tab)[which.max(tab)]
+  
+  mat <- sapply(1:length(resType), function(i){
+    ifelse(x %in% resType[i], 1, 0) * weights_model[colnames(predSmart_res)]
+  })
+  
+  colnames(mat) <- resType
+  rownames(mat) <- names(x)
+  mat_colMeans <- colMeans(mat)
+  final <- names(mat_colMeans)[which.max(mat_colMeans)]
+  scores <- max(mat_colMeans)
+  scores 
+})
+
+predtenXV2_res_ensemble_level2 <- apply(predtenXV2_res, 1, function(x) {
+  resType <- unique(x)
+  tab <- table(x)
+  names(tab)[which.max(tab)]
+  
+  mat <-sapply(1:length(resType), function(i){
+    ifelse(x %in% resType[i], 1, 0) * weights_model[colnames(predtenXV2_res)]
+  })
+  
+  colnames(mat) <- resType
+  rownames(mat) <- names(x)
+  mat_colMeans <- colMeans(mat)
+  final <- names(mat_colMeans)[which.max(mat_colMeans)]
+  scores <- max(mat_colMeans)
+  final 
+})
+
+```
+
+
+
+
+## tenX
+
+```{r}
+predtenX_res <- list(
+  smartseq = levinSmartSeqRes_ensemble_level2_res_weights$tenX$cellTypes,
+  celseq = levinCelSeqRes_ensemble_level2_res_weights$tenX$cellTypes,
+  tenXv2 = levinTenXV2Res_ensemble_level2_res_weights$tenX$cellTypes,
+  indrops = levinInDropsRes_ensemble_level2_res_weights$tenX$cellTypes,
+  dropseq = levinDropSeqsRes_ensemble_level2_res_weights$tenX$cellTypes,
+  seqwells = levinSeqWellsRes_ensemble_level2_res_weights$tenX$cellTypes)
+predtenX_res <- lapply(predtenX_res, as.character)
+predtenX_res <- do.call(cbind, predtenX_res)
+
+predtenX_res <- apply(predtenX_res, 1, function(x) {
+  x <- strsplit(x, "_")
+  x <- lapply(x, sort)
+  x <- unlist(lapply(x, function(l) paste(l, collapse = "_")))
+})
+
+predtenX_res <- t(predtenX_res)
+predtenX_res_ensemble_level2_scores <- apply(predtenX_res, 1, function(x) {
+  resType <- unique(x)
+  tab <- table(x)
+  names(tab)[which.max(tab)]
+  
+  mat <- sapply(1:length(resType), function(i){
+    ifelse(x %in% resType[i], 1, 0)* weights_model[colnames(predSmart_res)]
+  })
+  
+  colnames(mat) <- resType
+  rownames(mat) <- names(x)
+  mat_colMeans <- colMeans(mat)
+  final <- names(mat_colMeans)[which.max(mat_colMeans)]
+  scores <- max(mat_colMeans)
+  scores 
+})
+
+predtenX_res_ensemble_level2 <- apply(predtenX_res, 1, function(x) {
+  resType <- unique(x)
+  tab <- table(x)
+  names(tab)[which.max(tab)]
+  
+  mat <- sapply(1:length(resType), function(i){
+    ifelse(x %in% resType[i], 1, 0) * weights_model[colnames(predtenX_res)]
+  })
+  
+  colnames(mat) <- resType
+  rownames(mat) <- names(x)
+  mat_colMeans <- colMeans(mat)
+  final <- names(mat_colMeans)[which.max(mat_colMeans)]
+  scores <- max(mat_colMeans)
+  final 
+})
+
+```
+
+
+
+
+## indrops
+
+```{r}
+predinDrops_res <- list(
+  smartseq = levinSmartSeqRes_ensemble_level2_res_weights$inDrops$cellTypes,
+  celseq = levinCelSeqRes_ensemble_level2_res_weights$inDrops$cellTypes,
+  tenXv2 = levinTenXV2Res_ensemble_level2_res_weights$inDrops$cellTypes,
+  tenXv3 = levinTenXRes_ensemble_level2_res_weights$inDrops$cellTypes,
+  dropseq = levinDropSeqsRes_ensemble_level2_res_weights$inDrops$cellTypes,
+  seqwells = levinSeqWellsRes_ensemble_level2_res_weights$inDrops$cellTypes)
+predinDrops_res <- lapply(predinDrops_res, as.character)
+predinDrops_res <- do.call(cbind, predinDrops_res)
+
+predinDrops_res <- apply(predinDrops_res, 1, function(x) {
+  x <- strsplit(x, "_")
+  x <- lapply(x, sort)
+  x <- unlist(lapply(x, function(l) paste(l, collapse = "_")))
+})
+
+predinDrops_res <- t(predinDrops_res)
+predinDrops_res_ensemble_level2_scores <- apply(predinDrops_res, 1, function(x) {
+  resType <- unique(x)
+  tab <- table(x)
+  names(tab)[which.max(tab)]
+  
+  mat <- sapply(1:length(resType), function(i){
+    ifelse(x %in% resType[i], 1, 0) * weights_model[colnames(predSmart_res)]
+  })
+  
+  colnames(mat) <- resType
+  rownames(mat) <- names(x)
+  mat_colMeans <- colMeans(mat)
+  final <- names(mat_colMeans)[which.max(mat_colMeans)]
+  scores <- max(mat_colMeans)
+  scores 
+})
+
+predinDrops_res_ensemble_level2 <- apply(predinDrops_res, 1, function(x) {
+  resType <- unique(x)
+  tab <- table(x)
+  names(tab)[which.max(tab)]
+  
+  mat <- sapply(1:length(resType), function(i){
+    ifelse(x %in% resType[i], 1, 0) * weights_model[colnames(predinDrops_res)]
+  })
+  
+  colnames(mat) <- resType
+  rownames(mat) <- names(x)
+  mat_colMeans <- colMeans(mat)
+  final <- names(mat_colMeans)[which.max(mat_colMeans)]
+  scores <- max(mat_colMeans)
+  final 
+})
+
+```
+
+
+
+
+
+## dropSeq
+
+```{r}
+preddropSeq_res <- list(
+  smartseq = levinSmartSeqRes_ensemble_level2_res_weights$dropSeqs$cellTypes,
+  celseq = levinCelSeqRes_ensemble_level2_res_weights$dropSeqs$cellTypes,
+  tenXv2 = levinTenXV2Res_ensemble_level2_res_weights$dropSeqs$cellTypes,
+  tenXv3 = levinTenXRes_ensemble_level2_res_weights$dropSeqs$cellTypes,
+  indrops = levinInDropsRes_ensemble_level2_res_weights$dropSeqs$cellTypes,
+  seqwells = levinSeqWellsRes_ensemble_level2_res_weights$dropSeqs$cellTypes)
+preddropSeq_res <- lapply(preddropSeq_res, as.character)
+preddropSeq_res <- do.call(cbind, preddropSeq_res)
+
+preddropSeq_res <- apply(preddropSeq_res, 1, function(x) {
+  x <- strsplit(x, "_")
+  x <- lapply(x, sort)
+  x <- unlist(lapply(x, function(l) paste(l, collapse = "_")))
+})
+
+preddropSeq_res <- t(preddropSeq_res)
+preddropSeq_res_ensemble_level2_scores <- apply(preddropSeq_res, 1, function(x) {
+  resType <- unique(x)
+  tab <- table(x)
+  names(tab)[which.max(tab)]
+  
+  mat <- sapply(1:length(resType), function(i){
+    ifelse(x %in% resType[i], 1, 0) * weights_model[colnames(predSmart_res)]
+  })
+  
+  colnames(mat) <- resType
+  rownames(mat) <- names(x)
+  mat_colMeans <- colMeans(mat)
+  final <- names(mat_colMeans)[which.max(mat_colMeans)]
+  scores <- max(mat_colMeans)
+  scores 
+})
+
+preddropSeq_res_ensemble_level2 <- apply(preddropSeq_res, 1, function(x) {
+  resType <- unique(x)
+  tab <- table(x)
+  names(tab)[which.max(tab)]
+  
+  mat <- sapply(1:length(resType), function(i){
+    ifelse(x %in% resType[i], 1, 0) * weights_model[colnames(preddropSeq_res)]
+  })
+  
+  colnames(mat) <- resType
+  rownames(mat) <- names(x)
+  mat_colMeans <- colMeans(mat)
+  final <- names(mat_colMeans)[which.max(mat_colMeans)]
+  scores <- max(mat_colMeans)
+  final 
+})
+
+```
+
+
+
+## seqWell
+
+```{r}
+predseqWell_res <- list(
+  smartseq = levinSmartSeqRes_ensemble_level2_res_weights$seqWells$cellTypes,
+  celseq = levinCelSeqRes_ensemble_level2_res_weights$seqWells$cellTypes,
+  tenXv2 = levinTenXV2Res_ensemble_level2_res_weights$seqWells$cellTypes[-idx_seqWell_filtered],
+  tenXv3 = levinTenXRes_ensemble_level2_res_weights$seqWells$cellTypes,
+  indrops = levinInDropsRes_ensemble_level2_res_weights$seqWells$cellTypes[-idx_seqWell_filtered],
+  dropseq = levinDropSeqsRes_ensemble_level2_res_weights$seqWells$cellTypes[-idx_seqWell_filtered])
+predseqWell_res <- lapply(predseqWell_res, as.character)
+predseqWell_res <- do.call(cbind, predseqWell_res)
+
+predseqWell_res <- apply(predseqWell_res, 1, function(x) {
+  x <- strsplit(x, "_")
+  x <- lapply(x, sort)
+  x <- unlist(lapply(x, function(l) paste(l, collapse = "_")))
+})
+
+predseqWell_res <- t(predseqWell_res)
+predseqWell_res_ensemble_level2_scores <- apply(predseqWell_res, 1, function(x) {
+  resType <- unique(x)
+  tab <- table(x)
+  names(tab)[which.max(tab)]
+  
+  mat <- sapply(1:length(resType), function(i){
+    ifelse(x %in% resType[i], 1, 0) * weights_model[colnames(predseqWell_res)]
+  })
+  
+  colnames(mat) <- resType
+  rownames(mat) <- names(x)
+  mat_colMeans <- colMeans(mat)
+  final <- names(mat_colMeans)[which.max(mat_colMeans)]
+  scores <- max(mat_colMeans)
+  scores 
+})
+
+predseqWell_res_ensemble_level2 <- apply(predseqWell_res, 1, function(x) {
+  resType <- unique(x)
+  tab <- table(x)
+  names(tab)[which.max(tab)]
+  
+  mat <- sapply(1:length(resType), function(i){
+    ifelse(x %in% resType[i], 1, 0) * weights_model[colnames(predseqWell_res)]
+  })
+  
+  colnames(mat) <- resType
+  rownames(mat) <- names(x)
+  mat_colMeans <- colMeans(mat)
+  final <- names(mat_colMeans)[which.max(mat_colMeans)]
+  scores <- max(mat_colMeans)
+  final 
+})
+
+
+```
+
+# Summary
+
+```{r}
+all_cellTypes <- unique(c(levels(levinPBMCbenchmark_10x$CellType),
+                          levels(levinPBMCbenchmark_10xV2$CellType),
+                          levels(levinPBMCbenchmark_celSeq$CellType),
+                          levels(levinPBMCbenchmark_smartSeq$CellType),
+                          levels(levinPBMCbenchmark_seqWells$CellType),
+                          levels(levinPBMCbenchmark_inDrops$CellType),
+                          levels(levinPBMCbenchmark_dropSeqs$CellType)
+))
+all_cellTypes <- all_cellTypes[-10]
+tabFreq <- function(x) {
+  return(table(x)/length(x))
+}
+
+predTenX_eval <- cbind(apply(predtenX_res, 2, function(x) {
+  tabFreq(factor(ClassifyError2(x, levinPBMCbenchmark_10x$CellType, all_cellTypes), levels = errClass))
+}), joint = tabFreq(factor(ClassifyError2(predtenX_res_ensemble_level2, levinPBMCbenchmark_10x$CellType, all_cellTypes), levels = errClass)))
+
+
+predTenXV2_eval <- cbind(apply(predtenXV2_res, 2, function(x) {
+  tabFreq(factor(ClassifyError2(x, levinPBMCbenchmark_10xV2$CellType, all_cellTypes), levels = errClass))
+}), joint = tabFreq(factor(ClassifyError2(predtenXV2_res_ensemble_level2, levinPBMCbenchmark_10xV2$CellType, all_cellTypes), levels = errClass)))
+
+
+predCel_eval <- cbind(apply(predCel_res, 2, function(x) {
+  tabFreq(factor(ClassifyError2(x, levinPBMCbenchmark_celSeq$CellType, all_cellTypes), levels = errClass))
+}), joint = tabFreq(factor(ClassifyError2(predCel_res_ensemble_level2, levinPBMCbenchmark_celSeq$CellType, all_cellTypes), levels = errClass)))
+
+predSmart_eval <- cbind(apply(predSmart_res, 2, function(x) {
+  tabFreq(factor(ClassifyError2(x, levinPBMCbenchmark_smartSeq$CellType, all_cellTypes), levels = errClass))
+}), joint = tabFreq(factor(ClassifyError2(predSmart_res_ensemble_level2, levinPBMCbenchmark_smartSeq$CellType, all_cellTypes), levels = errClass)))
+
+
+predDropseqs_eval <- cbind(apply(preddropSeq_res, 2, function(x) {
+  tabFreq(factor(ClassifyError2(x, levinPBMCbenchmark_dropSeqs$CellType, all_cellTypes), levels = errClass))
+}), joint = tabFreq(factor(ClassifyError2(preddropSeq_res_ensemble_level2, levinPBMCbenchmark_dropSeqs$CellType, all_cellTypes), levels = errClass)))
+
+predInDrops_eval <- cbind(apply(predinDrops_res, 2, function(x) {
+  tabFreq(factor(ClassifyError2(x, levinPBMCbenchmark_inDrops$CellType, all_cellTypes), levels = errClass))
+}), joint = tabFreq(factor(ClassifyError2(predinDrops_res_ensemble_level2, levinPBMCbenchmark_inDrops$CellType, all_cellTypes), levels = errClass)))
+
+
+predSeqWells_eval <- cbind(apply(predseqWell_res, 2, function(x) {
+  tabFreq(factor(ClassifyError2(x, levinPBMCbenchmark_seqWells$CellType[-idx_seqWell_filtered], all_cellTypes), levels = errClass))
+}), joint = tabFreq(factor(ClassifyError2(predseqWell_res_ensemble_level2, levinPBMCbenchmark_seqWells$CellType[-idx_seqWell_filtered], all_cellTypes), levels = errClass)))
+
+```
+
+
+```{r}
+pred_eval <- list(
+  smartseq = predSmart_eval,
+  celseq = predCel_eval,
+  tenXv2 = predTenXV2_eval,
+  tenXv3 = predTenX_eval,
+  indrops = predInDrops_eval,
+  dropseq = predDropseqs_eval,
+  seqwells = predSeqWells_eval)
+
+
+pred_eval <- lapply(pred_eval, function(x){
+  tmp <- x[1, ] +x [2,] 
+  x <- rbind(x, tmp)
+  rownames(x) <- c(rownames(x)[-7], "acc")
+  x
+})
+
+pred_eval <- lapply(pred_eval, function(x){
+  tmp <- x[3, ]  +x[4,] 
+  x <- rbind(x, tmp)
+  rownames(x) <- c(rownames(x)[-8], "unassigned_withInt")
+  x
+})
+
+
+
+
+
+df_eval <- melt(pred_eval)
+colnames(df_eval) <- c("ClassifyRes", "Train", "value", "Test")
+df_eval$Train <- relevel(df_eval$Train, "joint")
+df_eval$weight <- weights_model[df_eval$Train]
+df_eval$weight[is.na(df_eval$weight)] <- 1
+
+
+ggplot(df_eval[df_eval$ClassifyRes == "acc", ], aes(x = Test, y = value, color = Train)) +
+  geom_point(size = 5) +
+  scale_color_brewer(palette = "Set1") +
+  theme_bw() +
+  theme(aspect.ratio = 1, text = element_text(size = 12, face = "bold")) +
+  ylab("Accuracy Rate")
+ggsave("figures/Figure4B_jointTraining_levinPBMC.pdf", height = 7, width = 8)
+
+
+
+
+ggplot(df_eval[df_eval$ClassifyRes %in% c("unassigned_withInt"), ], aes(x = Test, y = value, color = Train)) +
+  geom_point(size = 5) +
+  scale_color_brewer(palette = "Set1") +
+  theme_bw() +
+  theme(aspect.ratio = 1, text = element_text(size = 12, face = "bold")) +
+  ylab("Incorrectly unassigned + Intermediate rate")
+
+
+ggsave("figures/Figure4B_jointTraining_levinPBMC_barplot_intermediateUnassign.pdf", height = 7, width = 8)
+
+
+
+```
+
+
+
+# Benchmark - Level 1
+
+
+
+
+```{r}
+pbmc_cellTypes <- list(
+  smartSeq = levinPBMCbenchmark_smartSeq$CellType2,
+  celSeq = levinPBMCbenchmark_celSeq$CellType2,
+  `10x` = levinPBMCbenchmark_10x$CellType2,
+  `10xV2` = levinPBMCbenchmark_10xV2$CellType2,
+  inDrops = levinPBMCbenchmark_inDrops$CellType2,
+  dropSeqs = levinPBMCbenchmark_dropSeqs$CellType2,
+  seqWells = levinPBMCbenchmark_seqWells$CellType2
+)
+```
+
+
+## ACTINN
+
+```{r}
+files <- list.files("results/benchmarking_results/ACTINN/result_PBMC/", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+cases <- cases[1:42]
+ACTINN_res <- list()
+for (i in 1:length(cases)){
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/ACTINN/result_PBMC/', cases[i], '_ACTINN_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/ACTINN/result_PBMC/', cases[i], '_ACTINN_True.csv', sep = ""))
+  
+  ACTINN_res[[i]] <- ClassifyError(as.character(res$X0), 
+                                   cellTypes_test = pbmc_cellTypes[[strsplit(cases[i], "_")[[1]][2]]], 
+                                   cellTypes_train = pbmc_cellTypes[[strsplit(cases[i], "_")[[1]][1]]])
+  ACTINN_res[[i]] <- table(factor(ACTINN_res[[i]], levels = errClass))/length(ACTINN_res[[i]])
+}
+
+names(ACTINN_res) <- cases
+ACTINN_res <- do.call(rbind, ACTINN_res)
+
+```
+
+
+## Castle
+
+```{r}
+
+files <- list.files("results/benchmarking_results/CaSTLe/result_PBMC/", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+Castle_res <- list()
+for (i in 1:length(cases)){
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/CaSTLe/result_PBMC/', cases[i], '_Pred_CaSTLe.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/CaSTLe/result_PBMC/', cases[i], '_True_CaSTLe.csv', sep = ""))
+  Castle_res[[i]] <- ClassifyError(as.character(res$x), 
+                                   cellTypes_test = pbmc_cellTypes[[strsplit(cases[i], "_")[[1]][2]]], 
+                                   cellTypes_train = pbmc_cellTypes[[strsplit(cases[i], "_")[[1]][1]]])
+  Castle_res[[i]] <- table(factor(Castle_res[[i]], levels = errClass))/length(Castle_res[[i]])
+}
+
+
+names(Castle_res) <- cases
+Castle_res <- do.call(rbind, Castle_res)
+```
+
+
+
+## CHETAH
+
+```{r}
+
+
+files <- list.files("results/benchmarking_results/CHETAH//PBMC_level1/", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+CHETAH_res <- list()
+for (i in 1:length(cases)) {
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/CHETAH/PBMC_level1/', cases[i], '_CHETAH_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/CHETAH/PBMC_level1/', cases[i], '_CHETAH_True.csv', sep = ""))
+  CHETAH_res[[i]] <- ClassifyError(as.character(res$x), 
+                                   cellTypes_test = pbmc_cellTypes[[strsplit(cases[i], "_")[[1]][2]]], 
+                                   cellTypes_train = pbmc_cellTypes[[strsplit(cases[i], "_")[[1]][1]]])
+  CHETAH_res[[i]] <- table(factor(CHETAH_res[[i]], levels = errClass))/length(CHETAH_res[[i]])
+}
+
+names(CHETAH_res) <- cases
+
+CHETAH_res <- do.call(rbind, CHETAH_res)
+```
+
+
+## scID
+
+```{r}
+
+
+
+files <- list.files("results/benchmarking_results/scID/result_PBMC/", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+scID_res <- list()
+for (i in 1:length(cases)) {
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/scID/result_PBMC/', cases[i], '_scID_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/scID/result_PBMC/', cases[i], '_scID_True.csv', sep = ""))
+  scID_res[[i]] <- ClassifyError(as.character(res$x), 
+                                 cellTypes_test = pbmc_cellTypes[[strsplit(cases[i], "_")[[1]][2]]], 
+                                 cellTypes_train = pbmc_cellTypes[[strsplit(cases[i], "_")[[1]][1]]])
+  scID_res[[i]] <- table(factor(scID_res[[i]], levels = errClass))/length(scID_res[[i]])
+}
+
+names(scID_res) <- cases
+scID_res <- do.call(rbind, scID_res)
+```
+
+
+## singleR
+
+```{r}
+
+files <- list.files("results/benchmarking_results/singleR/result_PBMC/", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+singleR_res <- list()
+for (i in 1:length(cases)) {
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/singleR/result_PBMC/', cases[i], '_SingleR_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/singleR/result_PBMC/', cases[i], '_SingleR_True.csv', sep = ""))
+  singleR_res[[i]] <- ClassifyError(as.character(res$x), 
+                                    cellTypes_test = pbmc_cellTypes[[gsub(" ", "", strsplit(cases[i], "_")[[1]][2])]], 
+                                    cellTypes_train = pbmc_cellTypes[[gsub(" ", "", strsplit(cases[i], "_")[[1]][1])]])
+  singleR_res[[i]] <- table(factor(singleR_res[[i]], levels = errClass))/length(singleR_res[[i]])
+}
+
+
+names(singleR_res) <- cases
+singleR_res <- do.call(rbind, singleR_res)
+```
+
+
+## scPred
+
+```{r}
+
+
+files <- list.files("results/benchmarking_results/scPred/result_PBMC/", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+scPred_res <- list()
+for (i in 1:length(cases)) {
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/scPred/result_PBMC/', cases[i], '_scPred_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/scPred/result_PBMC/', cases[i], '_scPred_True.csv', sep = ""))
+  scPred_res[[i]] <- ClassifyError(as.character(res$x), 
+                                   cellTypes_test = pbmc_cellTypes[[strsplit(cases[i], "_")[[1]][2]]], 
+                                   cellTypes_train = pbmc_cellTypes[[strsplit(cases[i], "_")[[1]][1]]])
+  scPred_res[[i]] <- table(factor(scPred_res[[i]], levels = errClass))/length(scPred_res[[i]])
+}
+
+
+names(scPred_res) <- cases
+scPred_res <- do.call(rbind, scPred_res)
+```
+
+## scmap-cell
+
+```{r}
+
+files <- list.files("results/benchmarking_results/scmap/result_PBMC", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+scmapCell_res <- list()
+for (i in 1:length(cases)) {
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/scmap/result_PBMC/', cases[i], '_scmapcell_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/scmap/result_PBMC/', cases[i], '_scmapcell_True.csv', sep = ""))
+  scmapCell_res[[i]] <- ClassifyError(as.character(res$x), 
+                                      cellTypes_test = pbmc_cellTypes[[strsplit(cases[i], "_")[[1]][2]]],                                       cellTypes_train = pbmc_cellTypes[[strsplit(cases[i], "_")[[1]][1]]])
+  scmapCell_res[[i]] <- table(factor(scmapCell_res[[i]], levels = errClass))/length(scmapCell_res[[i]])
+}
+names(scmapCell_res) <- cases
+scmapCell_res <- do.call(rbind, scmapCell_res)
+```
+
+
+## scmap-cluster
+
+```{r}
+
+
+files <- list.files("results/benchmarking_results/scmap/result_PBMC", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+scmapCluster_res <- list()
+for (i in 1:length(cases)) {
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/scmap/result_PBMC/', cases[i], '_scmapcluster_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/scmap/result_PBMC/', cases[i], '_scmapcluster_True.csv', sep = ""))
+  scmapCluster_res[[i]] <- ClassifyError(as.character(res$x), 
+                                         cellTypes_test = pbmc_cellTypes[[strsplit(cases[i], "_")[[1]][2]]], 
+                                         cellTypes_train = pbmc_cellTypes[[strsplit(cases[i], "_")[[1]][1]]])
+  scmapCluster_res[[i]] <- table(factor(scmapCluster_res[[i]], levels = errClass))/length(scmapCluster_res[[i]])
+}
+
+names(scmapCluster_res) <- cases
+scmapCluster_res <- do.call(rbind, scmapCluster_res)
+```
+
+## Garnett
+
+```{r}
+
+
+files <- list.files("results/benchmarking_results/Garnett/result_PBMC/", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+Garnett_res <- list()
+for (i in 1:length(cases)) {
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/Garnett/result_PBMC/', cases[i], '_Garnett_CV_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/Garnett/result_PBMC/', cases[i], '_Garnett_CV_True.csv', sep = ""))
+  Garnett_res[[i]] <- ClassifyError(as.character(res$x), 
+                                    cellTypes_test = pbmc_cellTypes[[strsplit(cases[i], "_")[[1]][2]]], 
+                                    cellTypes_train = pbmc_cellTypes[[strsplit(cases[i], "_")[[1]][1]]])
+  Garnett_res[[i]] <- table(factor(Garnett_res[[i]], levels = errClass))/length(Garnett_res[[i]])
+}
+
+
+names(Garnett_res) <- cases
+Garnett_res <- do.call(rbind, Garnett_res)
+```
+
+
+
+## singleCellNet
+
+```{r}
+
+
+files <- list.files("results/benchmarking_results/singlecellNet/result_PBMC/", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+singleCellNet_res <- list()
+for (i in 1:length(cases)) {
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/singlecellNet/result_PBMC/', cases[i], '_singleCellNet_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/singlecellNet/result_PBMC/', cases[i], '_singleCellNet_True.csv', sep = ""))
+  singleCellNet_res[[i]] <- ClassifyError(as.character(res$x[1:length(true$x)]), 
+                                          cellTypes_test = pbmc_cellTypes[[strsplit(cases[i], "_")[[1]][2]]], 
+                                          cellTypes_train = pbmc_cellTypes[[strsplit(cases[i], "_")[[1]][1]]])
+  singleCellNet_res[[i]] <- table(factor(singleCellNet_res[[i]], levels = errClass))/length(singleCellNet_res[[i]])
+}
+
+names(singleCellNet_res) <- cases
+singleCellNet_res <- do.call(rbind, singleCellNet_res)
+```
+
+## scVI
+
+```{r}
+
+
+files <- list.files("results/benchmarking_results/scVI/result_PBMC/", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+cases <- cases[!grepl(".csv", cases)]
+scVI_res <- list()
+for (i in 1:length(cases)) {
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/scVI/result_PBMC/', cases[i], '_scVI_Pred_map.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/scVI/result_PBMC/', cases[i], '_scVI_True_map.csv', sep = ""))
+  # scVI_res[[i]] <- sum(res$X0 == true$X0)/length(res$X0)
+  scVI_res[[i]] <- ClassifyError(as.character(res$X0),
+                                 cellTypes_test = true$X0,
+                                 cellTypes_train = pbmc_cellTypes[[strsplit(cases[i], "_")[[1]][1]]])
+  scVI_res[[i]] <- table(factor(scVI_res[[i]], levels = errClass))/length(scVI_res[[i]])
+}
+
+
+names(scVI_res) <- cases
+scVI_res <- do.call(rbind, scVI_res)
+
+```
+
+
+## Moana
+
+```{r}
+
+
+files <- list.files("results/benchmarking_results/moana/result_PBMC/", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+cases <- cases[!grepl(".csv", cases)]
+
+moana_res <- list()
+for (i in 1:length(cases)) {
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/moana/result_PBMC/', cases[i], '_moana_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/moana/result_PBMC/', cases[i], '_moana_True.csv', sep = ""))
+  moana_res[[i]] <- ClassifyError(as.character(res$Predicted.cell.type), 
+                                  cellTypes_test = pbmc_cellTypes[[strsplit(cases[i], "_")[[1]][2]]], 
+                                  cellTypes_train = pbmc_cellTypes[[strsplit(cases[i], "_")[[1]][1]]])
+  moana_res[[i]] <- table(factor(moana_res[[i]], levels = errClass))/length(moana_res[[i]])
+}
+
+names(moana_res) <- cases
+moana_res <- do.call(rbind, moana_res)
+```
+
+## Garnett (DE)
+
+```{r}
+
+
+files <- list.files("results/benchmarking_results/Garnett_DE/result_PBMC//", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+Garnett_DE_res <- list()
+for (i in 1:length(cases)) {
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/Garnett_DE/result_PBMC/', cases[i], '_Garnett_DE_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/Garnett_DE/result_PBMC/', cases[i], '_Garnett_DE_True.csv', sep = ""))
+  Garnett_DE_res[[i]] <- ClassifyError(as.character(res$x), 
+                                       cellTypes_test = pbmc_cellTypes[[strsplit(cases[i], "_")[[1]][2]]], 
+                                       cellTypes_train = pbmc_cellTypes[[strsplit(cases[i], "_")[[1]][1]]])
+  Garnett_DE_res[[i]] <- table(factor(Garnett_DE_res[[i]], levels = errClass))/length(Garnett_DE_res[[i]])
+}
+
+
+names(Garnett_DE_res) <- cases
+Garnett_DE_res <- do.call(rbind, Garnett_DE_res)
+```
+
+
+
+
+## SVM reject
+
+
+```{r}
+
+
+files <- list.files("results/benchmarking_results/SVM_reject/result_PBMC//", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+SVM_reject_res <- list()
+for (i in 1:length(cases)) {
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/SVM_reject/result_PBMC/', cases[i], '_SVMreject_pred.csv', sep = ""), stringsAsFactors = FALSE)
+  true <- read.csv(paste('results/benchmarking_results/SVM_reject/result_PBMC/', cases[i], '_SVMreject_true.csv', sep = ""), stringsAsFactors = FALSE)
+  SVM_reject_res[[i]] <- ClassifyError(as.character(res$X0), 
+                                       cellTypes_test = pbmc_cellTypes[[strsplit(cases[i], "_")[[1]][2]]], 
+                                       cellTypes_train = pbmc_cellTypes[[strsplit(cases[i], "_")[[1]][1]]])
+  SVM_reject_res[[i]] <- table(factor(SVM_reject_res[[i]], levels = errClass))/length(SVM_reject_res[[i]])
+}
+
+
+names(SVM_reject_res) <- cases
+SVM_reject_res <- do.call(rbind, SVM_reject_res)
+```
+
+
+
+## scClassify
+
+```{r}
+scClassify_res <- scClassify_res_pearson
+scClassifyEnsemble_res <- ensemble_res_final_weights
+```
+
+
+## Evaluation
+
+
+
+
+```{r}
+all_res <- list(scClassify = scClassify_res,
+                scClassify_ensemble = scClassifyEnsemble_res,
+                singleR = singleR_res,
+                moana = moana_res,
+                singlecellNet = singleCellNet_res,
+                ACTINN = ACTINN_res,
+                scVI = scVI_res,
+                CHETAH = CHETAH_res,
+                scID = scID_res,
+                Garnett = Garnett_res,
+                scmapCell = scmapCell_res,
+                scmapCluster = scmapCluster_res,
+                scPred = scPred_res,
+                Garnett_DE = Garnett_DE_res,
+                SVM_reject = SVM_reject_res,
+                CaSTLe = Castle_res
+)
+
+rownames(all_res$singleR) <- gsub(" ", "", rownames(all_res$singleR))
+
+all_res <- lapply(all_res, function(x){
+  x <- data.frame(x)
+  x$Experiment <- rownames(x)
+  x$Accuracy <- x[,"correct"] + x[,"correctly.unassigned"]
+  x$Accuracy_withIntermediate <- x[,"correct"] + x[,"correctly.unassigned"] + x[,"intermediate"]
+  x
+})
+
+saveRDS(all_res, file = "results/levinPBMC_level1_evaluaRes.rds")
+
+
+
+all_res <- lapply(all_res, function(x){
+  x <- data.frame(x)
+  x$outlier <- x$Accuracy < quantile(x$Accuracy)[2] - 1.5*IQR(x$Accuracy)
+  x
+})
+
+
+library(reshape2)
+df_toPlot <- melt(all_res)
+colnames(df_toPlot) <- c("Experiment", "outlier", "errClass", "value", "Method")
+df_toPlot$Method <- factor(as.character(df_toPlot$Method), levels = names(all_res))
+
+
+```
+
+
+```{r}
+
+method_col <- c(tableau_color_pal("Tableau 20")(20)[c(11)], tableau_color_pal("Classic 20")(7)[7], tableau_color_pal("Tableau 20")(20)[c(1:10, 13:20)])
+
+names(method_col) <- names(all_res)
+saveRDS(method_col, file = "results/method_colors.rds")
+```
+
+
+
+```{r}
+
+
+ggplot(df_toPlot[df_toPlot$errClass == "Accuracy_withIntermediate",], aes(x = Method, y = value, color = Method)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(position = position_jitter(seed = 1), alpha = 0.6, size = 1) +
+  scale_color_manual(values = method_col) +
+  theme_bw() +
+  theme_yx() +
+  ylab("Accuracy Rate (Including intermediate)") +
+  theme(legend.position = "bottom", text = element_text(size = 14, face = "bold"), axis.text.x = element_blank(), aspect.ratio = 1) +
+  labs(title = "PBMC (Level 1)")
+ggsave("figures/Figure2B_LevinPBMCLevel1_evaluation_accuracyWithInt_overall_ar1.pdf", width = 8, height = 6)
+```
+
+
+# Benchmark - Level 2
+
+```{r}
+pbmc_cellTypes2 <- list(
+  smartSeq = levinPBMCbenchmark_smartSeq$CellType,
+  celSeq = levinPBMCbenchmark_celSeq$CellType,
+  `10x` = levinPBMCbenchmark_10x$CellType,
+  `10xV2` = levinPBMCbenchmark_10xV2$CellType,
+  inDrops = levinPBMCbenchmark_inDrops$CellType,
+  dropSeqs = levinPBMCbenchmark_dropSeqs$CellType,
+  seqWells = levinPBMCbenchmark_seqWells$CellType
+)
+```
+
+## ACTINN
+```{r}
+files <- list.files("results/benchmarking_results/ACTINN/result_PBMC_originalc/", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+cases <- cases[1:42]
+ACTINN_res <- list()
+for (i in 1:length(cases)){
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/ACTINN/result_PBMC_originalc/', cases[i], '_ACTINN_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/ACTINN/result_PBMC_originalc/', cases[i], '_ACTINN_True.csv', sep = ""))
+  
+  ACTINN_res[[i]] <- ClassifyError(as.character(res$X0), 
+                cellTypes_test = pbmc_cellTypes2[[strsplit(cases[i], "_")[[1]][2]]], 
+                cellTypes_train = pbmc_cellTypes2[[strsplit(cases[i], "_")[[1]][1]]])
+  ACTINN_res[[i]] <- table(factor(ACTINN_res[[i]], levels = errClass))/length(ACTINN_res[[i]])
+}
+
+names(ACTINN_res) <- cases
+ACTINN_res <- do.call(rbind, ACTINN_res)
+
+```
+
+
+## Castle
+
+```{r}
+
+files <- list.files("results/benchmarking_results/CaSTLe/result_PBMC_originalc/", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+Castle_res <- list()
+for (i in 1:length(cases)){
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/CaSTLe/result_PBMC_originalc/', cases[i], '_Pred_CaSTLe.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/CaSTLe/result_PBMC_originalc/', cases[i], '_True_CaSTLe.csv', sep = ""))
+  Castle_res[[i]] <- ClassifyError(as.character(res$x), 
+                cellTypes_test = pbmc_cellTypes2[[strsplit(cases[i], "_")[[1]][2]]], 
+                cellTypes_train = pbmc_cellTypes2[[strsplit(cases[i], "_")[[1]][1]]])
+  Castle_res[[i]] <- table(factor(Castle_res[[i]], levels = errClass))/length(Castle_res[[i]])
+}
+
+
+names(Castle_res) <- cases
+Castle_res <- do.call(rbind, Castle_res)
+```
+
+
+
+## CHETAH
+
+```{r}
+
+
+files <- list.files("results/benchmarking_results/CHETAH/PBMC_level2/", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+CHETAH_res <- list()
+for (i in 1:length(cases)) {
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/CHETAH/PBMC_level2/', cases[i], '_CHETAH_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/CHETAH/PBMC_level2/', cases[i], '_CHETAH_True.csv', sep = ""))
+  CHETAH_res[[i]] <- ClassifyError(as.character(res$x), 
+                cellTypes_test = pbmc_cellTypes2[[strsplit(cases[i], "_")[[1]][2]]], 
+                cellTypes_train = pbmc_cellTypes2[[strsplit(cases[i], "_")[[1]][1]]])
+  CHETAH_res[[i]] <- table(factor(CHETAH_res[[i]], levels = errClass))/length(CHETAH_res[[i]])
+}
+
+
+names(CHETAH_res) <- cases
+
+CHETAH_res <- do.call(rbind, CHETAH_res)
+```
+
+
+## scID
+
+```{r}
+
+
+
+files <- list.files("results/benchmarking_results/scID/result_PBMC_originalc/", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+scID_res <- list()
+for (i in 1:length(cases)) {
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/scID/result_PBMC_originalc/', cases[i], '_scID_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/scID/result_PBMC_originalc/', cases[i], '_scID_True.csv', sep = ""))
+  scID_res[[i]] <- ClassifyError(as.character(res$x), 
+                cellTypes_test = pbmc_cellTypes2[[strsplit(cases[i], "_")[[1]][2]]], 
+                cellTypes_train = pbmc_cellTypes2[[strsplit(cases[i], "_")[[1]][1]]])
+  scID_res[[i]] <- table(factor(scID_res[[i]], levels = errClass))/length(scID_res[[i]])
+}
+
+
+names(scID_res) <- cases
+scID_res <- do.call(rbind, scID_res)
+```
+
+
+## singleR
+
+```{r}
+
+files <- list.files("results/benchmarking_results/singleR/result_PBMC_originalc/", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+singleR_res <- list()
+for (i in 1:length(cases)) {
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/singleR/result_PBMC_originalc/', cases[i], '_SingleR_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/singleR/result_PBMC_originalc/', cases[i], '_SingleR_True.csv', sep = ""))
+  singleR_res[[i]] <- ClassifyError(as.character(res$x), 
+                cellTypes_test = pbmc_cellTypes2[[gsub(" ", "", strsplit(cases[i], "_")[[1]][2])]], 
+                cellTypes_train = pbmc_cellTypes2[[gsub(" ", "", strsplit(cases[i], "_")[[1]][1])]])
+  singleR_res[[i]] <- table(factor(singleR_res[[i]], levels = errClass))/length(singleR_res[[i]])
+}
+
+
+names(singleR_res) <- cases
+singleR_res <- do.call(rbind, singleR_res)
+```
+
+
+## scPred
+
+```{r}
+
+
+files <- list.files("results/benchmarking_results/scPred/result_PBMC_originalc/", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+scPred_res <- list()
+for (i in 1:length(cases)) {
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/scPred/result_PBMC_originalc/', cases[i], '_scPred_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/scPred/result_PBMC_originalc/', cases[i], '_scPred_True.csv', sep = ""))
+  scPred_res[[i]] <- ClassifyError(as.character(res$x), 
+                cellTypes_test = pbmc_cellTypes2[[strsplit(cases[i], "_")[[1]][2]]], 
+                cellTypes_train = pbmc_cellTypes2[[strsplit(cases[i], "_")[[1]][1]]])
+  scPred_res[[i]] <- table(factor(scPred_res[[i]], levels = errClass))/length(scPred_res[[i]])
+}
+
+
+names(scPred_res) <- cases
+scPred_res <- do.call(rbind, scPred_res)
+```
+
+## scmap-cell
+
+```{r}
+
+files <- list.files("results/benchmarking_results/scmap/result_PBMC_originalc/", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+scmapCell_res <- list()
+for (i in 1:length(cases)) {
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/scmap/result_PBMC_originalc/', cases[i], '_scmapcell_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/scmap/result_PBMC_originalc/', cases[i], '_scmapcell_True.csv', sep = ""))
+  scmapCell_res[[i]] <- ClassifyError(as.character(res$x), 
+                cellTypes_test = pbmc_cellTypes2[[strsplit(cases[i], "_")[[1]][2]]], 
+                cellTypes_train = pbmc_cellTypes2[[strsplit(cases[i], "_")[[1]][1]]])
+  scmapCell_res[[i]] <- table(factor(scmapCell_res[[i]], levels = errClass))/length(scmapCell_res[[i]])
+}
+
+
+names(scmapCell_res) <- cases
+scmapCell_res <- do.call(rbind, scmapCell_res)
+```
+
+
+## scmap-cluster
+
+```{r}
+
+
+files <- list.files("results/benchmarking_results/scmap/result_PBMC_originalc", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+scmapCluster_res <- list()
+for (i in 1:length(cases)) {
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/scmap/result_PBMC_originalc/', cases[i], '_scmapcluster_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/scmap/result_PBMC_originalc/', cases[i], '_scmapcluster_True.csv', sep = ""))
+  scmapCluster_res[[i]] <- ClassifyError(as.character(res$x), 
+                cellTypes_test = pbmc_cellTypes2[[strsplit(cases[i], "_")[[1]][2]]], 
+                cellTypes_train = pbmc_cellTypes2[[strsplit(cases[i], "_")[[1]][1]]])
+  scmapCluster_res[[i]] <- table(factor(scmapCluster_res[[i]], levels = errClass))/length(scmapCluster_res[[i]])
+}
+
+
+names(scmapCluster_res) <- cases
+scmapCluster_res <- do.call(rbind, scmapCluster_res)
+```
+
+## Garnett
+
+```{r}
+
+
+files <- list.files("results/benchmarking_results/Garnett/result_PBMC_originalc//", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+Garnett_res <- list()
+for (i in 1:length(cases)) {
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/Garnett/result_PBMC_originalc/', cases[i], '_Garnett_CV_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/Garnett/result_PBMC_originalc/', cases[i], '_Garnett_CV_True.csv', sep = ""))
+  Garnett_res[[i]] <- ClassifyError(as.character(res$x), 
+                cellTypes_test = pbmc_cellTypes2[[strsplit(cases[i], "_")[[1]][2]]], 
+                cellTypes_train = pbmc_cellTypes2[[strsplit(cases[i], "_")[[1]][1]]])
+  Garnett_res[[i]] <- table(factor(Garnett_res[[i]], levels = errClass))/length(Garnett_res[[i]])
+}
+
+
+names(Garnett_res) <- cases
+Garnett_res <- do.call(rbind, Garnett_res)
+```
+
+
+## Garnett (DE)
+
+```{r}
+
+
+files <- list.files("results/benchmarking_results/Garnett_DE/result_PBMC_originalc//", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+Garnett_DE_res <- list()
+for (i in 1:length(cases)) {
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/Garnett_DE/result_PBMC_originalc/', cases[i], '_Garnett_DE_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/Garnett_DE/result_PBMC_originalc/', cases[i], '_Garnett_DE_True.csv', sep = ""))
+  Garnett_DE_res[[i]] <- ClassifyError(as.character(res$x), 
+                cellTypes_test = pbmc_cellTypes2[[strsplit(cases[i], "_")[[1]][2]]], 
+                cellTypes_train = pbmc_cellTypes2[[strsplit(cases[i], "_")[[1]][1]]])
+  Garnett_DE_res[[i]] <- table(factor(Garnett_DE_res[[i]], levels = errClass))/length(Garnett_DE_res[[i]])
+}
+
+
+names(Garnett_DE_res) <- cases
+Garnett_DE_res <- do.call(rbind, Garnett_DE_res)
+```
+
+
+
+
+## singleCellNet
+
+```{r}
+
+
+files <- list.files("results/benchmarking_results/singlecellNet/result_PBMC_originalc//", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+singleCellNet_res <- list()
+for (i in 1:length(cases)) {
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/singlecellNet/result_PBMC_originalc/', cases[i], '_singleCellNet_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/singlecellNet/result_PBMC_originalc/', cases[i], '_singleCellNet_True.csv', sep = ""))
+  singleCellNet_res[[i]] <- ClassifyError(as.character(res$x[1:length(true$x)]), 
+                cellTypes_test = pbmc_cellTypes2[[strsplit(cases[i], "_")[[1]][2]]], 
+                cellTypes_train = pbmc_cellTypes2[[strsplit(cases[i], "_")[[1]][1]]])
+  singleCellNet_res[[i]] <- table(factor(singleCellNet_res[[i]], levels = errClass))/length(singleCellNet_res[[i]])
+}
+
+
+names(singleCellNet_res) <- cases
+singleCellNet_res <- do.call(rbind, singleCellNet_res)
+```
+
+## scVI
+
+```{r}
+
+
+files <- list.files("results/benchmarking_results/scVI/result_mapped_PBMC_originalc//", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+cases <- cases[!grepl(".csv", cases)]
+scVI_res <- list()
+for (i in 1:length(cases)) {
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/scVI/result_mapped_PBMC_originalc/', cases[i], '_scVI_Pred_map.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/scVI/result_mapped_PBMC_originalc/', cases[i], '_scVI_True_map.csv', sep = ""))
+  # scVI_res[[i]] <- sum(res$X0 == true$X0)/length(res$X0)
+  scVI_res[[i]] <- ClassifyError(as.character(res$X0),
+                cellTypes_test = true$X0,
+                cellTypes_train = pbmc_cellTypes2[[strsplit(cases[i], "_")[[1]][1]]])
+  scVI_res[[i]] <- table(factor(scVI_res[[i]], levels = errClass))/length(scVI_res[[i]])
+}
+
+
+names(scVI_res) <- cases
+scVI_res <- do.call(rbind, scVI_res)
+
+```
+
+
+## Moana
+
+```{r}
+
+
+files <- list.files("results/benchmarking_results/moana/result_PBMC_originalc//", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+cases <- cases[!grepl(".csv", cases)]
+
+moana_res <- list()
+for (i in 1:length(cases)) {
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/moana/result_PBMC_originalc/', cases[i], '_moana_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/moana/result_PBMC_originalc/', cases[i], '_moana_True.csv', sep = ""))
+  moana_res[[i]] <- ClassifyError(as.character(res$Predicted.cell.type), 
+                cellTypes_test = pbmc_cellTypes2[[strsplit(cases[i], "_")[[1]][2]]], 
+                cellTypes_train = pbmc_cellTypes2[[strsplit(cases[i], "_")[[1]][1]]])
+  moana_res[[i]] <- table(factor(moana_res[[i]], levels = errClass))/length(moana_res[[i]])
+}
+
+
+names(moana_res) <- cases
+moana_res <- do.call(rbind, moana_res)
+```
+
+
+
+
+## SVM reject
+
+
+```{r}
+
+
+files <- list.files("results/benchmarking_results/SVM_reject//result_PBMC_originalc//", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+SVM_reject_res <- list()
+for (i in 1:length(cases)) {
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/SVM_reject/result_PBMC_originalc/', cases[i], '_SVMreject_pred.csv', sep = ""), stringsAsFactors = FALSE)
+  true <- read.csv(paste('results/benchmarking_results/SVM_reject/result_PBMC_originalc/', cases[i], '_SVMreject_true.csv', sep = ""), stringsAsFactors = FALSE)
+  SVM_reject_res[[i]] <- ClassifyError(as.character(res$X0), 
+                cellTypes_test = pbmc_cellTypes2[[strsplit(cases[i], "_")[[1]][2]]], 
+                cellTypes_train = pbmc_cellTypes2[[strsplit(cases[i], "_")[[1]][1]]])
+  SVM_reject_res[[i]] <- table(factor(SVM_reject_res[[i]], levels = errClass))/length(SVM_reject_res[[i]])
+}
+
+
+names(SVM_reject_res) <- cases
+SVM_reject_res <- do.call(rbind, SVM_reject_res)
+```
+
+
+
+## scClassify
+
+```{r}
+scClassify_res <- scClassify_res_pearson_level2
+scClassifyEnsemble_res <- ensemble_level2_res_final_weights
+
+```
+
+
+
+
+
+## Evaluation
+
+
+```{r}
+all_res <- list(scClassify = scClassify_res,
+                scClassify_ensemble = scClassifyEnsemble_res,
+                singleR = singleR_res,
+                moana = moana_res,
+                singlecellNet = singleCellNet_res,
+                ACTINN = ACTINN_res,
+                scVI = scVI_res,
+                CHETAH = CHETAH_res,
+                scID = scID_res,
+                Garnett = Garnett_res,
+                scmapCell = scmapCell_res,
+                scmapCluster = scmapCluster_res,
+                scPred = scPred_res,
+                Garnett_DE = Garnett_DE_res,
+                SVM_reject = SVM_reject_res,
+                CaSTLe = Castle_res
+                )
+
+rownames(all_res$singleR) <- gsub(" ", "", rownames(all_res$singleR))
+
+all_res <- lapply(all_res, function(x){
+  x <- data.frame(x)
+  x$Experiment <- rownames(x)
+  x$Accuracy <- x[,"correct"] + x[,"correctly.unassigned"]
+  x$Accuracy_withIntermediate <- x[,"correct"] + x[,"correctly.unassigned"] + x[,"intermediate"]
+  x
+})
+
+
+
+saveRDS(all_res, "results/levinPBMC_level2_evaluaRes.rds")
+
+df_toPlot <- melt(all_res)
+colnames(df_toPlot) <- c("Experiment", "errClass", "value", "Method")
+df_toPlot$Method <- factor(as.character(df_toPlot$Method), levels = names(all_res))
+
+```
+
+
+```{r}
+
+
+ggplot(df_toPlot[df_toPlot$errClass == "Accuracy_withIntermediate",], aes(x = Method, y = value, color = Method)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(position = position_jitter(seed = 1), alpha = 0.6, size = 1) +
+  scale_color_manual(values = method_col) +
+  theme_bw() +
+  theme_yx() +
+  ylab("Accuracy Rate (Including intermediate)") +
+  theme(legend.position = "bottom", text = element_text(size = 14, face = "bold"), axis.text.x = element_blank(), aspect.ratio = 1) +
+  labs(title = "PBMC (Level 2)")
+ggsave("figures/Figure2B_LevinPBMC_evaluation_accuracyWithInt_overall_level2_ar1.pdf", width = 8, height = 6)
+```
+
+
+# SectionInfo
+
+```{r}
+sessionInfo()
+```
+
+
+

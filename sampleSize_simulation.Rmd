@@ -1,0 +1,148 @@
+---
+title: "Sample Size Calculation for SymSim results"
+author: "Yingxin Lin"
+output:
+  html_document:
+    code_folding: hide
+    number_sections: yes
+    toc: yes
+    fig_height: 12
+    fig_width: 12
+    toc_float:
+      collapsed: true
+      smooth_scroll: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Functions and results
+
+```{r}
+library(ggplot2)
+library(ggthemes)
+library(scales)
+library(ggpubr)
+library(ggforce)
+library(reshape2)
+library(gridExtra)
+library(scClassify)
+```
+
+
+```{r}
+res_sigma <- readRDS("results/res_sigma_learningCurveRes.rds")
+```
+
+
+
+```{r}
+accMat_symsim <- res_sigma[res_sigma$ErrorClass == "correct", ]
+library(reshape2)
+accMat_symsim <- dcast(accMat_symsim, ...~N, value.var = "value")
+
+alpha_list <- unique(accMat_symsim$alpha)
+sigma_list <- unique(accMat_symsim$sigma)
+
+accMat_symsim_list <- list()
+
+for (i in 1:length(alpha_list)) {
+  for (j in 1:length(sigma_list)) {
+    accMat_symsim_list[[length(accMat_symsim_list) + 1]] <- accMat_symsim[accMat_symsim$alpha == alpha_list[i] & accMat_symsim$sigma == sigma_list[j], -c(1:4)]
+  }
+}
+
+paraNames <- c()
+for (i in 1:length(alpha_list)) {
+  for (j in 1:length(sigma_list)) {
+    paraNames <- rbind(paraNames, c(alpha_list[i], sigma_list[j], paste(alpha_list[i], sigma_list[j], sep = "_")))
+  }
+}
+
+names(paraNames) <- c("alpha", "sigma", "combined")
+
+names(accMat_symsim_list) <- paraNames[, 3]
+
+```
+
+
+```{r results="hide"}
+
+res_pbmc10k_level2_train <- learningCurve(na.omit(as.matrix(accMat_symsim_list[[1]])),
+                                  as.numeric(names(accMat_symsim_list[[1]])))
+
+symsim_learningCurve_fit <- list()
+
+for(i in 1:length(accMat_symsim_list)) {
+  symsim_learningCurve_fit[[i]] <- learningCurve(na.omit(as.matrix(accMat_symsim_list[[i]])),
+                                  as.numeric(names(accMat_symsim_list[[i]])),
+                                  fitmodel = "nls_mix",
+                                  d_list = seq(20, 50, 10))
+}
+
+names(symsim_learningCurve_fit) <- paraNames[,3]
+symsim_learningCurve_fit_fitted <- do.call(cbind, lapply(symsim_learningCurve_fit, function(x) x$fit$mean))
+symsim_learningCurve_fit_fitted_n <- symsim_learningCurve_fit[[1]]$fit$n
+
+colnames(symsim_learningCurve_fit_fitted) <- paraNames[,3]
+rownames(symsim_learningCurve_fit_fitted) <- symsim_learningCurve_fit_fitted_n
+symsim_learningCurve_fit_fitted <- melt(symsim_learningCurve_fit_fitted)
+
+symsim_learningCurve_fit_fitted$alpha <- unlist(lapply(strsplit(as.character(symsim_learningCurve_fit_fitted$Var2), "_"), "[[", 1))
+
+symsim_learningCurve_fit_fitted$sigma <- unlist(lapply(strsplit(as.character(symsim_learningCurve_fit_fitted$Var2), "_"), "[[", 2))
+
+
+
+colnames(symsim_learningCurve_fit_fitted) <- c("N", "case", "value", "alpha", "sigma")
+
+
+
+ggplot(symsim_learningCurve_fit_fitted, aes(x = N, y = value, color = alpha)) +
+  geom_line() +
+  scale_color_viridis_d(option = "C", end = 0.8, direction = -1) +
+  facet_wrap(~sigma, nrow = 4) +
+  scale_x_continuous(limits = c(50, 1000), breaks = c(50, 100, 200, seq(500, 1000, 250))) +
+  theme_bw() +
+  ylab("Accuracy Rate") +
+  theme(legend.position = "bottom") 
+
+
+ggsave("figures/AppendixFigS4B_sysSim_learning_curve.pdf", width = 5, height = 8)
+```
+
+
+```{r}
+
+res_overall <- readRDS("results/res_alpha.rds")
+res_overall_melt <- melt(res_overall)
+
+
+res_overall_melt <- cbind(res_overall_melt, do.call(rbind, strsplit(res_overall_melt$L1, "_")))
+
+
+colnames(res_overall_melt) <- c("classifyRes", "iter", "value", "para", "alpha", "depth", "sigma")
+
+res_overall_melt <- res_overall_melt[res_overall_melt$value <= 1, ]
+
+res_overall_melt$depth <- as.numeric(as.character(res_overall_melt$depth))
+res_overall_melt$depth <- factor(res_overall_melt$depth, levels = unique(res_overall_melt$depth))
+
+
+
+ggplot(res_overall_melt[res_overall_melt$classifyRes == "correct" & res_overall_melt$sigma != 1,], aes(x = alpha, y = value,  color = depth)) +
+  geom_boxplot() +
+  stat_summary(fun.y = mean, geom = "line", lwd = 1, aes(group = depth), alpha = 0.5, position = position_dodge(width = 1)) +
+  facet_wrap(~sigma, nrow = 4) +
+  scale_colour_viridis_d(option = "D", end = 0.95) +
+  theme_bw() +
+  xlab("alpha (Capture Efficiency)") +
+  ylab("Accuracy Rate") +
+  theme(legend.position = "bottom") 
+
+ggsave("figures/AppendixFigS4A_sysSim_res_boxplot.pdf", width = 5, height = 8)
+
+
+```
+

@@ -1,0 +1,2126 @@
+---
+title: "Pancreas Ensemble Learning Summary"
+author: "Yingxin Lin, Yue Cao"
+output:
+  html_document:
+    code_folding: hide
+    number_sections: yes
+    toc: yes
+    fig_height: 12
+    fig_width: 12
+    toc_float:
+      collapsed: true
+      smooth_scroll: false
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,message = FALSE,warning = FALSE)
+```
+
+# Data and Functions
+
+```{r}
+library(SingleCellExperiment)
+library(scater)
+library(scran)
+library(ggplot2)
+library(gridExtra)
+library(ggthemes)
+library(pheatmap)
+library(reshape2)
+library(ggpubr)
+
+```
+
+```{r}
+errClass <- c("correct", "correctly unassigned",  "intermediate", "incorrectly unassigned",
+              "error assigned", "misclassified")
+
+ClassifyError <- function(cellTypes_pred, cellTypes_test, cellTypes_train){
+  if(length(cellTypes_pred)!=length(cellTypes_test)){
+    stop("wrong input")
+  }
+  train_ref <- unique(cellTypes_train)
+  test_ref <- unique(cellTypes_test)
+  res <- sapply(1:length(cellTypes_pred), function(i){
+    if(cellTypes_test[i]%in%train_ref){
+      if(cellTypes_pred[i] %in% c("unassigned", "Unassigned")){
+        "incorrectly unassigned"
+      }else if(cellTypes_pred[i] == "intermediate"){
+        "intermediate"
+      }else{
+        if(cellTypes_test[i] == cellTypes_pred[i]){
+          "correct"
+        }else if(grepl(cellTypes_test[i], cellTypes_pred[i])|grepl("Node", cellTypes_pred[i])){
+          "intermediate"
+        }
+        else{
+          "misclassified"
+        }
+      }
+    }else{
+      if(cellTypes_pred[i] %in% c("unassigned","Unassigned")){
+        "correctly unassigned"
+      }else{
+        "error assigned"
+      }
+    }
+  })
+  return(res)
+}
+
+freqError <- function(x){
+  x <- factor(x, levels = errClass)
+  table(x)/length(x)
+}
+```
+
+
+
+```{r}
+load("data/pancreasSeven.RData")
+
+
+baron <- baron[,grep("human", colnames(baron))]
+
+baron
+muraro1
+muraro2
+segerstolpe
+lawlor
+xin
+wang
+
+xin$cellTypes[xin$cellTypes=="PP"] <- "gamma"
+
+table(baron$cellTypes)
+table(muraro1$cellTypes)
+table(muraro2$cellTypes)
+table(segerstolpe$cellTypes)
+table(lawlor$cellTypes)
+table(xin$cellTypes)
+table(wang$cellTypes)
+
+muraro2$cellTypes[muraro2$cellTypes == "mesenchymal"] <- "stellate"
+
+wang$cellTypes[wang$cellTypes == "mesenchymal"] <- "stellate"
+
+segerstolpe <- segerstolpe[,!segerstolpe$cellTypes%in%c("co-expression","unclassified endocrine")]
+
+pancreas_cellTypes <- list(
+  baron = baron$cellTypes,
+  muraro2 = muraro2$cellTypes,
+  segerstolpe = segerstolpe$cellTypes,
+  wang = wang$cellTypes,
+  xin = xin$cellTypes,
+  lawlor = lawlor$cellTypes
+)
+```
+
+
+```{r}
+muraro_scClassify_ensemble_res <- readRDS("ensembleRes/muraro_scClassify_ensemble_res.rds")
+lawlor_scClassify_ensemble_res <- readRDS("ensembleRes/lawlor_scClassify_ensemble_res.rds")
+segerstolpe_scClassify_ensemble_res <- readRDS("ensembleRes/segerstolpe_scClassify_ensemble_res.rds")
+wang_scClassify_ensemble_res <- readRDS("ensembleRes/wang_scClassify_ensemble_res.rds")
+xin_scClassify_ensemble_res <- readRDS("ensembleRes/xin_scClassify_ensemble_res.rds")
+baron_scClassify_ensemble_res <- readRDS("ensembleRes/baron_scClassify_ensemble_res.rds")
+```
+
+
+Helper functions
+
+(It is incorporated to `scClassify` package)
+
+
+
+```{r}
+
+getEnsembleError <- function(res){
+  ensembleErr <- do.call(rbind, lapply(res, function(x) table(x$classifyRes)/length(x$classifyRes)))
+  return(ensembleErr)
+}
+
+
+getEnsembleRes <- function(res, exclude = NULL, weight = NULL){
+  
+  if(!is.null(exclude)){
+    keep_method <- !grepl(paste(exclude,collapse = "|"), names(res))
+    res <- res[keep_method]
+    weight <- weight[keep_method]
+  }
+  
+  if(is.null(weight)){
+    weight <- rep(1, length(res))
+  }
+  
+  ensembleResMat <- do.call(cbind, lapply(res, function(x) x$predRes))
+  
+  ensembleRes <- apply(ensembleResMat, 1, function(x) {
+    names(x) <- colnames(ensembleResMat)
+    # keep <- x!="unassigned"
+    keep <- rep(TRUE, length(x))
+    if(sum(keep) == 0){
+      data.frame(cellTypes = "unassigned", scores = 0)
+    }else{
+      # tab <- table(x)/length(x)
+      # ensemble_cellTypes <- names(tab)[which.max(tab)]
+      # ensemble_scores <- max(tab)
+      getResByWeights(x[keep], weight[keep])
+    }
+    # data.frame(cellTypes = ensemble_cellTypes, scores = ensemble_scores)
+    
+    
+  })
+  
+  ensembleRes <- do.call(rbind, ensembleRes)
+  return(ensembleRes)
+}
+
+
+getResByWeights <- function(res, weight) {
+  resType <- unique(res)
+  if(length(resType) == 1){
+    final <- resType
+    scores <- 1
+  }else{
+    
+    
+    mat <- sapply(1:length(resType), function(i){
+      ifelse(res %in% resType[i], 1, 0) * weight
+    })
+    colnames(mat) <- resType
+    rownames(mat) <- names(res)
+    mat_colMeans <- colMeans(mat)
+    final <- names(mat_colMeans)[which.max(mat_colMeans)]
+    scores <- max(mat_colMeans)/sum(mat_colMeans)
+  }
+  return(data.frame(cellTypes = final, scores = scores))
+}
+```
+
+
+
+
+
+
+# Calculate Weights
+
+
+```{r}
+lawlor_ensemble_error <- lapply(lawlor_scClassify_ensemble_res$testRes, getEnsembleError)
+xin_ensemble_res <- lapply(xin_scClassify_ensemble_res$testRes, getEnsembleRes)
+xin_ensemble_error <- lapply(xin_scClassify_ensemble_res$testRes, getEnsembleError)
+wang_ensemble_res <- lapply(wang_scClassify_ensemble_res$testRes, getEnsembleRes)
+wang_ensemble_error <- lapply(wang_scClassify_ensemble_res$testRes, getEnsembleError)
+segerstolpe_ensemble_res <- lapply(segerstolpe_scClassify_ensemble_res$testRes, getEnsembleRes)
+segerstolpe_ensemble_error <- lapply(segerstolpe_scClassify_ensemble_res$testRes, getEnsembleError)
+muraro_ensemble_res <- lapply(muraro_scClassify_ensemble_res$testRes, getEnsembleRes)
+muraro_ensemble_error <- lapply(muraro_scClassify_ensemble_res$testRes, getEnsembleError)
+baron_ensemble_res <- lapply(baron_scClassify_ensemble_res$testRes, getEnsembleRes)
+baron_ensemble_error <- lapply(baron_scClassify_ensemble_res$testRes, getEnsembleError)
+```
+
+
+```{r}
+misclassifiedMat <- cbind(do.call(cbind, lapply(lawlor_ensemble_error, function(x) x[,1] + x[,2])),
+                          do.call(cbind, lapply(xin_ensemble_error, function(x) x[,1] + x[,2])),
+                          do.call(cbind, lapply(wang_ensemble_error, function(x) x[,1] + x[,2])),
+                          do.call(cbind, lapply(segerstolpe_ensemble_error, function(x) x[,1] + x[,2])),
+                          do.call(cbind, lapply(muraro_ensemble_error, function(x) x[,1] + x[,2])),
+                          do.call(cbind, lapply(baron_ensemble_error, function(x) x[,1] + x[,2])))
+colnames(misclassifiedMat) <- c(paste("lawlor_", names(lawlor_ensemble_error), sep = ""), 
+                                paste("xin_", names(xin_ensemble_error), sep = ""), 
+                                paste("wang_", names(wang_ensemble_error), sep = ""), 
+                                paste("segerstolpe_", names(segerstolpe_ensemble_error), sep = ""), 
+                                paste("muraro_", names(muraro_ensemble_error), sep = ""),
+                                paste("baron_", names(baron_ensemble_error), sep = ""))
+
+rownames(misclassifiedMat)[grep("weighted_rank", rownames(misclassifiedMat))] <- gsub("weighted_rank", "weighted.rank", rownames(misclassifiedMat)[grep("weighted_rank", rownames(misclassifiedMat))])
+anno_col <- data.frame(feature = unlist(lapply(strsplit(rownames(misclassifiedMat), "_"), "[[", 3)),
+                       distance = unlist(lapply(strsplit(rownames(misclassifiedMat), "_"), "[[", 1)),
+                       KNN = unlist(lapply(strsplit(rownames(misclassifiedMat), "_"), "[[", 2)))
+rownames(anno_col) <- rownames(misclassifiedMat)
+
+anno_colour <- list(feature = tableau_color_pal(palette = "Purple-Pink-Gray")(5)[c(1,2,4,5,3)],
+                    distance = tableau_color_pal(palette = "Tableau 10")(6),
+                    KNN = tableau_color_pal(palette = "Winter")(6)[c(3,4)])
+
+names(anno_colour$feature) <- levels(anno_col$feature)
+names(anno_colour$distance) <- levels(anno_col$distance)
+names(anno_colour$KNN) <- levels(anno_col$KNN)
+
+
+color_forHeatmap <- rev(viridis::viridis(200, begin = 0.1))
+
+
+
+toplot <- misclassifiedMat[order(round(apply(misclassifiedMat, 1, mean), 3), anno_col$distance, anno_col$feature),]
+toplot <- toplot[grepl("WKNN", rownames(toplot)), ]
+
+
+breaks <- c(seq(0.2, 0.5, 0.1), seq(0.51, 1, 0.0001))
+color_forHeatmap <- (viridis::plasma(length(breaks), begin = 0))
+
+pheatmap(t(toplot),
+         cluster_rows = F,
+         cluster_cols = F,
+         color = color_forHeatmap,
+         annotation_col = anno_col,
+         annotation_colors = anno_colour,
+         breaks = breaks)
+```
+
+
+```{r}
+
+pheatmap(t(toplot),
+         cluster_rows = F,
+         cluster_cols = F,
+         color = color_forHeatmap,
+         annotation_col = anno_col,
+         annotation_colors = anno_colour,
+         breaks = breaks,
+         filename = "figures/Figure1C_heatmap_misclassified_pancreasSix_ensemble_revision_plasma.pdf",
+         width = 12,
+         height = 10)
+
+write.csv(toplot, file = "ensembleRes/pancreas_ensemble_accuracy_rate_mat.csv", row.names = TRUE)
+```
+
+
+
+```{r}
+lawlor_scClassify_ensemble_res_itself <- readRDS("ensembleRes/lawlor_scClassify_ensemble_res_itself.rds")
+
+
+lawlor_ensemble_acc_train <- lapply(lawlor_scClassify_ensemble_res_itself$testRes, getEnsembleError)[[1]][,1]
+
+
+alpha <- function(e) {
+  log((1 - e)/e)
+}
+
+
+
+lawlor_ensemble_res_weights <- lapply(lawlor_scClassify_ensemble_res$testRes, function(x) 
+  getEnsembleRes(x, exclude = c("_KNN"),
+                 weight = alpha(1 - lawlor_ensemble_acc_train)))
+
+lawlor_ensemble_res_final_weights <- rbind(xin = freqError(ClassifyError(as.character(lawlor_ensemble_res_weights$xin$cellTypes), xin$cellTypes, lawlor$cellTypes)),
+                                           wang = freqError(ClassifyError(as.character(lawlor_ensemble_res_weights$wang$cellTypes), wang$cellTypes, lawlor$cellTypes)),
+                                           segerstolpe = freqError(ClassifyError(as.character(lawlor_ensemble_res_weights$segerstolpe$cellTypes), segerstolpe$cellTypes, lawlor$cellTypes)),
+                                           baron = freqError(ClassifyError(as.character(lawlor_ensemble_res_weights$baron$cellTypes), baron$cellTypes, lawlor$cellTypes)),
+                                           muraro = freqError(ClassifyError(as.character(lawlor_ensemble_res_weights$muraro$cellTypes), muraro2$cellTypes, lawlor$cellTypes)))
+
+
+
+lawlor_scClassify_res_pancreas_pearson <- rbind(xin = freqError(ClassifyError(as.character(lawlor_scClassify_ensemble_res$testRes$xin$pearson_WKNN_limma$predRes), xin$cellTypes, lawlor$cellTypes)),
+                                                wang = freqError(ClassifyError(as.character(lawlor_scClassify_ensemble_res$testRes$wang$pearson_WKNN_limma$predRes), wang$cellTypes, lawlor$cellTypes)),
+                                                segerstolpe = freqError(ClassifyError(as.character(lawlor_scClassify_ensemble_res$testRes$segerstolpe$pearson_WKNN_limma$predRes), segerstolpe$cellTypes, lawlor$cellTypes)),
+                                                baron = freqError(ClassifyError(as.character(lawlor_scClassify_ensemble_res$testRes$baron$pearson_WKNN_limma$predRes), baron$cellTypes, lawlor$cellTypes)),
+                                                muraro = freqError(ClassifyError(as.character(lawlor_scClassify_ensemble_res$testRes$muraro$pearson_WKNN_limma$predRes), muraro2$cellTypes, lawlor$cellTypes)))
+
+```
+
+
+```{r}
+wang_scClassify_ensemble_res_itself <- readRDS("ensembleRes/wang_scClassify_ensemble_res_itself.rds")
+
+
+wang_ensemble_acc_train <- lapply(wang_scClassify_ensemble_res_itself$testRes, getEnsembleError)[[1]][,1]
+
+
+alpha <- function(e) {
+  log((1 - e)/e)
+}
+
+
+
+wang_ensemble_res_weights <- lapply(wang_scClassify_ensemble_res$testRes, function(x) 
+  getEnsembleRes(x, exclude = c("_KNN"),
+                 weight = alpha(1 - wang_ensemble_acc_train)))
+
+wang_ensemble_res_final_weights <- rbind(xin = freqError(ClassifyError(as.character(wang_ensemble_res_weights$xin$cellTypes), xin$cellTypes, wang$cellTypes)),
+                                         lawlor = freqError(ClassifyError(as.character(wang_ensemble_res_weights$lawlor$cellTypes), lawlor$cellTypes, wang$cellTypes)),
+                                         segerstolpe = freqError(ClassifyError(as.character(wang_ensemble_res_weights$segerstolpe$cellTypes), segerstolpe$cellTypes, wang$cellTypes)),
+                                         baron = freqError(ClassifyError(as.character(wang_ensemble_res_weights$baron$cellTypes), baron$cellTypes, wang$cellTypes)),
+                                         muraro = freqError(ClassifyError(as.character(wang_ensemble_res_weights$muraro$cellTypes), muraro2$cellTypes, wang$cellTypes)))
+
+
+
+
+
+wang_scClassify_res_pancreas_pearson <- rbind(xin = freqError(ClassifyError(as.character(wang_scClassify_ensemble_res$testRes$xin$pearson_WKNN_limma$predRes), xin$cellTypes, wang$cellTypes)),
+                                              lawlor = freqError(ClassifyError(as.character(wang_scClassify_ensemble_res$testRes$lawlor$pearson_WKNN_limma$predRes), lawlor$cellTypes, wang$cellTypes)),
+                                              segerstolpe = freqError(ClassifyError(as.character(wang_scClassify_ensemble_res$testRes$segerstolpe$pearson_WKNN_limma$predRes), segerstolpe$cellTypes, wang$cellTypes)),
+                                              baron = freqError(ClassifyError(as.character(wang_scClassify_ensemble_res$testRes$baron$pearson_WKNN_limma$predRes), baron$cellTypes, wang$cellTypes)),
+                                              muraro = freqError(ClassifyError(as.character(wang_scClassify_ensemble_res$testRes$muraro$pearson_WKNN_limma$predRes), muraro2$cellTypes, wang$cellTypes)))
+
+
+```
+
+
+```{r}
+baron_scClassify_ensemble_res_itself <- readRDS("ensembleRes/baron_scClassify_ensemble_res_itself.rds")
+
+
+baron_ensemble_acc_train <- lapply(baron_scClassify_ensemble_res_itself$testRes, getEnsembleError)[[1]][,1]
+
+
+alpha <- function(e) {
+  log((1 - e)/e)
+}
+
+
+
+baron_ensemble_res_weights <- lapply(baron_scClassify_ensemble_res$testRes, function(x) 
+  getEnsembleRes(x, exclude = c("_KNN"),
+                 weight = alpha(1 - baron_ensemble_acc_train)))
+
+baron_ensemble_res_final_weights <- rbind(xin = freqError(ClassifyError(as.character(baron_ensemble_res_weights$xin$cellTypes), xin$cellTypes, baron$cellTypes)),
+                                          lawlor = freqError(ClassifyError(as.character(baron_ensemble_res_weights$lawlor$cellTypes), lawlor$cellTypes, baron$cellTypes)),
+                                          segerstolpe = freqError(ClassifyError(as.character(baron_ensemble_res_weights$segerstolpe$cellTypes), segerstolpe$cellTypes, baron$cellTypes)),
+                                          wang = freqError(ClassifyError(as.character(baron_ensemble_res_weights$wang$cellTypes), wang$cellTypes, baron$cellTypes)),
+                                          muraro = freqError(ClassifyError(as.character(baron_ensemble_res_weights$muraro$cellTypes), muraro2$cellTypes, baron$cellTypes)))
+
+
+
+
+
+baron_scClassify_res_pancreas_pearson <- rbind(xin = freqError(ClassifyError(as.character(baron_scClassify_ensemble_res$testRes$xin$pearson_WKNN_limma$predRes), xin$cellTypes, baron$cellTypes)),
+                                               lawlor = freqError(ClassifyError(as.character(baron_scClassify_ensemble_res$testRes$lawlor$pearson_WKNN_limma$predRes), lawlor$cellTypes, baron$cellTypes)),
+                                               segerstolpe = freqError(ClassifyError(as.character(baron_scClassify_ensemble_res$testRes$segerstolpe$pearson_WKNN_limma$predRes), segerstolpe$cellTypes, baron$cellTypes)),
+                                               wang = freqError(ClassifyError(as.character(baron_scClassify_ensemble_res$testRes$wang$pearson_WKNN_limma$predRes), wang$cellTypes, baron$cellTypes)),
+                                               muraro = freqError(ClassifyError(as.character(baron_scClassify_ensemble_res$testRes$muraro$pearson_WKNN_limma$predRes), muraro2$cellTypes, baron$cellTypes)))
+
+
+
+```
+
+
+```{r}
+segerstolpe_scClassify_ensemble_res_itself <- readRDS("ensembleRes/segerstolpe_scClassify_ensemble_res_itself.rds")
+
+
+segerstolpe_ensemble_acc_train <- lapply(segerstolpe_scClassify_ensemble_res_itself$testRes, getEnsembleError)[[1]][,1]
+
+
+alpha <- function(e) {
+  log((1 - e)/e)
+}
+
+
+
+segerstolpe_ensemble_res_weights <- lapply(segerstolpe_scClassify_ensemble_res$testRes, function(x) 
+  getEnsembleRes(x, exclude = c("_KNN"),
+                 weight = alpha(1 - segerstolpe_ensemble_acc_train)))
+
+
+
+
+segerstolpe_ensemble_res_final_weights <- rbind(xin = freqError(ClassifyError(as.character(segerstolpe_ensemble_res_weights$xin$cellTypes), xin$cellTypes, segerstolpe$cellTypes)),
+                                                lawlor = freqError(ClassifyError(as.character(segerstolpe_ensemble_res_weights$lawlor$cellTypes), lawlor$cellTypes, segerstolpe$cellTypes)),
+                                                wang = freqError(ClassifyError(as.character(segerstolpe_ensemble_res_weights$wang$cellTypes), wang$cellTypes, segerstolpe$cellTypes)),
+                                                baron = freqError(ClassifyError(as.character(segerstolpe_ensemble_res_weights$baron$cellTypes), baron$cellTypes, segerstolpe$cellTypes)),
+                                                muraro = freqError(ClassifyError(as.character(segerstolpe_ensemble_res_weights$muraro$cellTypes), muraro2$cellTypes, segerstolpe$cellTypes)))
+
+
+
+
+segerstolpe_scClassify_res_pancreas_pearson <- rbind(xin = freqError(ClassifyError(as.character(segerstolpe_scClassify_ensemble_res$testRes$xin$pearson_WKNN_limma$predRes), xin$cellTypes, segerstolpe$cellTypes)),
+                                                     lawlor = freqError(ClassifyError(as.character(segerstolpe_scClassify_ensemble_res$testRes$lawlor$pearson_WKNN_limma$predRes), lawlor$cellTypes, segerstolpe$cellTypes)),
+                                                     wang = freqError(ClassifyError(as.character(segerstolpe_scClassify_ensemble_res$testRes$wang$pearson_WKNN_limma$predRes), wang$cellTypes, segerstolpe$cellTypes)),
+                                                     baron = freqError(ClassifyError(as.character(segerstolpe_scClassify_ensemble_res$testRes$baron$pearson_WKNN_limma$predRes), baron$cellTypes, segerstolpe$cellTypes)),
+                                                     muraro = freqError(ClassifyError(as.character(segerstolpe_scClassify_ensemble_res$testRes$muraro$pearson_WKNN_limma$predRes), muraro2$cellTypes, segerstolpe$cellTypes)))
+
+
+```
+
+
+
+```{r}
+xin_scClassify_ensemble_res_itself <- readRDS("ensembleRes/xin_scClassify_ensemble_res_itself.rds")
+
+
+xin_ensemble_acc_train <- lapply(xin_scClassify_ensemble_res_itself$testRes, getEnsembleError)[[1]][,1]
+
+
+alpha <- function(e) {
+  log((1 - e)/e)
+}
+
+xin_ensemble_res_weights <- lapply(xin_scClassify_ensemble_res$testRes, function(x) 
+  getEnsembleRes(x, exclude = c("_KNN"),
+                 weight = alpha(1 - xin_ensemble_acc_train)))
+
+xin_ensemble_res_final_weights <- rbind(muraro = freqError(ClassifyError(as.character(xin_ensemble_res_weights$muraro$cellTypes), muraro2$cellTypes, xin$cellTypes)),
+                                        lawlor = freqError(ClassifyError(as.character(xin_ensemble_res_weights$lawlor$cellTypes), lawlor$cellTypes, xin$cellTypes)),
+                                        wang = freqError(ClassifyError(as.character(xin_ensemble_res_weights$wang$cellTypes), wang$cellTypes, xin$cellTypes)),
+                                        baron = freqError(ClassifyError(as.character(xin_ensemble_res_weights$baron$cellTypes), baron$cellTypes, xin$cellTypes)),
+                                        segerstolpe = freqError(ClassifyError(as.character(xin_ensemble_res_weights$segerstolpe$cellTypes), segerstolpe$cellTypes, xin$cellTypes)))
+
+
+xin_scClassify_res_pancreas_pearson <- rbind(muraro = freqError(ClassifyError(as.character(xin_scClassify_ensemble_res$testRes$muraro$pearson_WKNN_limma$predRes), muraro2$cellTypes, xin$cellTypes)),
+                                             lawlor = freqError(ClassifyError(as.character(xin_scClassify_ensemble_res$testRes$lawlor$pearson_WKNN_limma$predRes), lawlor$cellTypes, xin$cellTypes)),
+                                             wang = freqError(ClassifyError(as.character(xin_scClassify_ensemble_res$testRes$wang$pearson_WKNN_limma$predRes), wang$cellTypes, xin$cellTypes)),
+                                             baron = freqError(ClassifyError(as.character(xin_scClassify_ensemble_res$testRes$baron$pearson_WKNN_limma$predRes), baron$cellTypes, xin$cellTypes)),
+                                             segerstolpe = freqError(ClassifyError(as.character(xin_scClassify_ensemble_res$testRes$segerstolpe$pearson_WKNN_limma$predRes), segerstolpe$cellTypes, xin$cellTypes)))
+
+```
+
+
+
+```{r}
+muraro_scClassify_ensemble_res_itself <- readRDS("ensembleRes/muraro_scClassify_ensemble_res_itself.rds")
+
+
+muraro_ensemble_acc_train <- lapply(muraro_scClassify_ensemble_res_itself$testRes, getEnsembleError)[[1]][,1]
+
+
+alpha <- function(e) {
+  log((1 - e)/e)
+}
+
+muraro_ensemble_res_weights <- lapply(muraro_scClassify_ensemble_res$testRes, function(x) 
+  getEnsembleRes(x, exclude = c("_KNN"),
+                 weight = alpha(1 - muraro_ensemble_acc_train)))
+
+muraro_ensemble_res_final_weights <- rbind(xin = freqError(ClassifyError(as.character(muraro_ensemble_res_weights$xin$cellTypes), xin$cellTypes, muraro2$cellTypes)),
+                                           lawlor = freqError(ClassifyError(as.character(muraro_ensemble_res_weights$lawlor$cellTypes), lawlor$cellTypes, muraro2$cellTypes)),
+                                           wang = freqError(ClassifyError(as.character(muraro_ensemble_res_weights$wang$cellTypes), wang$cellTypes, muraro2$cellTypes)),
+                                           baron = freqError(ClassifyError(as.character(muraro_ensemble_res_weights$baron$cellTypes), baron$cellTypes, muraro2$cellTypes)),
+                                           segerstolpe = freqError(ClassifyError(as.character(muraro_ensemble_res_weights$segerstolpe$cellTypes), segerstolpe$cellTypes, muraro2$cellTypes)))
+
+
+
+muraro_scClassify_res_pancreas_pearson <- rbind(xin = freqError(ClassifyError(as.character(muraro_scClassify_ensemble_res$testRes$xin$pearson_WKNN_limma$predRes), xin$cellTypes, muraro2$cellTypes)),
+                                                lawlor = freqError(ClassifyError(as.character(muraro_scClassify_ensemble_res$testRes$lawlor$pearson_WKNN_limma$predRes), lawlor$cellTypes, muraro2$cellTypes)),
+                                                wang = freqError(ClassifyError(as.character(muraro_scClassify_ensemble_res$testRes$wang$pearson_WKNN_limma$predRes), wang$cellTypes, muraro2$cellTypes)),
+                                                baron = freqError(ClassifyError(as.character(muraro_scClassify_ensemble_res$testRes$baron$pearson_WKNN_limma$predRes), baron$cellTypes, muraro2$cellTypes)),
+                                                segerstolpe = freqError(ClassifyError(as.character(muraro_scClassify_ensemble_res$testRes$segerstolpe$pearson_WKNN_limma$predRes), segerstolpe$cellTypes, muraro2$cellTypes)))
+
+
+
+
+```
+
+
+# Ensemble results
+
+
+
+```{r}
+freqError <- function(x){
+  x <- factor(x, levels = errClass)
+  table(x)/length(x)
+}
+```
+
+
+```{r}
+
+lawlor_pearson_res <- do.call(rbind, lapply(lawlor_ensemble_error, function(x) x[1,]))
+wang_pearson_res <- do.call(rbind, lapply(wang_ensemble_error, function(x) x[1,]))
+xin_pearson_res <- do.call(rbind, lapply(xin_ensemble_error, function(x) x[1,]))
+segerstolpe_pearson_res <- do.call(rbind, lapply(segerstolpe_ensemble_error, function(x) x[1,]))
+baron_pearson_res <- do.call(rbind, lapply(baron_ensemble_error, function(x) x[1,]))
+muraro_pearson_res <- do.call(rbind, lapply(muraro_ensemble_error, function(x) x[1,]))
+
+
+pearson_res <- rbind(baron_pearson_res,
+                     muraro_pearson_res,
+                     lawlor_pearson_res,
+                     segerstolpe_pearson_res,
+                     xin_pearson_res,
+                     wang_pearson_res)
+
+rownames(pearson_res) <- c(paste("baron_", rownames(baron_pearson_res), sep = ""),
+                           paste("muraro_", rownames(muraro_pearson_res), sep = ""),
+                           paste("lawlor_", rownames(lawlor_pearson_res), sep = ""),
+                           paste("segerstolpe_", rownames(segerstolpe_pearson_res), sep = ""),
+                           paste("xin_", rownames(xin_pearson_res), sep = ""),
+                           paste("wang_", rownames(wang_pearson_res), sep = ""))
+```
+
+
+```{r}
+
+
+
+ensemble_res_final_weights <- rbind(baron_ensemble_res_final_weights,
+                                    muraro_ensemble_res_final_weights,
+                                    lawlor_ensemble_res_final_weights,
+                                    segerstolpe_ensemble_res_final_weights,
+                                    xin_ensemble_res_final_weights,
+                                    wang_ensemble_res_final_weights)
+
+rownames(ensemble_res_final_weights) <- c(paste("baron_", rownames(baron_ensemble_res_final_weights), sep = ""),
+                                          paste("muraro_", rownames(muraro_ensemble_res_final_weights), sep = ""),
+                                          paste("lawlor_", rownames(lawlor_ensemble_res_final_weights), sep = ""),
+                                          paste("segerstolpe_", rownames(segerstolpe_ensemble_res_final_weights), sep = ""),
+                                          paste("xin_", rownames(xin_ensemble_res_final_weights), sep = ""),
+                                          paste("wang_", rownames(wang_ensemble_res_final_weights), sep = ""))
+
+
+saveRDS(ensemble_res_final_weights, "results/pancreas_scClassifyRes_EnsembleWeighted.rds")
+
+
+
+
+
+scClassify_res_pancreas_pearson <- rbind(baron_scClassify_res_pancreas_pearson,
+                                         muraro_scClassify_res_pancreas_pearson,
+                                         lawlor_scClassify_res_pancreas_pearson,
+                                         segerstolpe_scClassify_res_pancreas_pearson,
+                                         xin_scClassify_res_pancreas_pearson,
+                                         wang_scClassify_res_pancreas_pearson)
+
+rownames(scClassify_res_pancreas_pearson) <- c(paste("baron_", rownames(baron_scClassify_res_pancreas_pearson), sep = ""),
+                                               paste("muraro_", rownames(muraro_scClassify_res_pancreas_pearson), sep = ""),
+                                               paste("lawlor_", rownames(lawlor_scClassify_res_pancreas_pearson), sep = ""),
+                                               paste("segerstolpe_", rownames(segerstolpe_scClassify_res_pancreas_pearson), sep = ""),
+                                               paste("xin_", rownames(xin_scClassify_res_pancreas_pearson), sep = ""),
+                                               paste("wang_", rownames(wang_scClassify_res_pancreas_pearson), sep = ""))
+
+
+saveRDS(scClassify_res_pancreas_pearson, "results/pancreas_scClassifyRes_pearsonDE.rds")
+
+```
+
+
+# Benchmarking
+
+
+
+## ACTINN
+```{r}
+files <- list.files("results/benchmarking_results/ACTINN/result", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+ACTINN_res <- list()
+for (i in 1:length(cases)){
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/ACTINN/result/', cases[i], '_ACTINN_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/ACTINN/result/', cases[i], '_ACTINN_True.csv', sep = ""))
+  
+  ACTINN_res[[i]] <- ClassifyError(as.character(res$X0), 
+                                   cellTypes_test = pancreas_cellTypes[[strsplit(cases[i], "_")[[1]][2]]], 
+                                   cellTypes_train = pancreas_cellTypes[[strsplit(cases[i], "_")[[1]][1]]])
+  ACTINN_res[[i]] <- table(factor(ACTINN_res[[i]], levels = errClass))/length(ACTINN_res[[i]])
+}
+
+names(ACTINN_res) <- cases
+ACTINN_res <- do.call(rbind, ACTINN_res)
+
+```
+
+
+## Castle
+```{r}
+
+files <- list.files("results/benchmarking_results/CaSTLe/result", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+Castle_res <- list()
+for (i in 1:length(cases)){
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/CaSTLe/result/', cases[i], '_Pred_CaSTLe.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/CaSTLe/result/', cases[i], '_True_CaSTLe.csv', sep = ""))
+  Castle_res[[i]] <- ClassifyError(as.character(res$x), 
+                                   cellTypes_test = pancreas_cellTypes[[strsplit(cases[i], "_")[[1]][2]]], 
+                                   cellTypes_train = pancreas_cellTypes[[strsplit(cases[i], "_")[[1]][1]]])
+  Castle_res[[i]] <- table(factor(Castle_res[[i]], levels = errClass))/length(Castle_res[[i]])
+}
+
+
+names(Castle_res) <- cases
+Castle_res <- do.call(rbind, Castle_res)
+```
+
+
+
+## CHETAH
+```{r}
+human_idx <- grep("human", colnames(baron))
+
+files <- list.files("results/benchmarking_results/CHETAH/pancreas/", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+CHETAH_res <- list()
+for (i in 1:length(cases)){
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/CHETAH/pancreas/', cases[i], '_CHETAH_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/CHETAH/pancreas/', cases[i], '_CHETAH_True.csv', sep = ""))
+  if(strsplit(cases[i], "_")[[1]][2] == "baron") {
+    CHETAH_res[[i]] <- ClassifyError(as.character(res$x)[human_idx], 
+                                     cellTypes_test = pancreas_cellTypes[[strsplit(cases[i], "_")[[1]][2]]], 
+                                     cellTypes_train = pancreas_cellTypes[[strsplit(cases[i], "_")[[1]][1]]])
+  }else {
+    CHETAH_res[[i]] <- ClassifyError(as.character(res$x), 
+                                     cellTypes_test = pancreas_cellTypes[[strsplit(cases[i], "_")[[1]][2]]], 
+                                     cellTypes_train = pancreas_cellTypes[[strsplit(cases[i], "_")[[1]][1]]])
+  }
+  
+  CHETAH_res[[i]] <- table(factor(CHETAH_res[[i]], levels = errClass))/length(CHETAH_res[[i]])
+}
+
+
+names(CHETAH_res) <- cases
+
+CHETAH_res <- do.call(rbind, CHETAH_res)
+```
+
+
+## scID
+
+```{r}
+
+
+
+files <- list.files("results/benchmarking_results/scID", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+scID_res <- list()
+for (i in 1:length(cases)){
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/scID/', cases[i], '_scID_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/scID/', cases[i], '_scID_True.csv', sep = ""))
+  scID_res[[i]] <- ClassifyError(as.character(res$x), 
+                                 cellTypes_test = pancreas_cellTypes[[strsplit(cases[i], "_")[[1]][2]]], 
+                                 cellTypes_train = pancreas_cellTypes[[strsplit(cases[i], "_")[[1]][1]]])
+  scID_res[[i]] <- table(factor(scID_res[[i]], levels = errClass))/length(scID_res[[i]])
+}
+
+
+names(scID_res) <- cases
+scID_res <- do.call(rbind, scID_res)
+```
+
+
+## singleR
+
+```{r}
+
+files <- list.files("results/benchmarking_results/singleR/result/", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+singleR_res <- list()
+for (i in 1:length(cases)){
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/singleR/result/', cases[i], '_SingleR_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/singleR/result/', cases[i], '_SingleR_True.csv', sep = ""))
+  singleR_res[[i]] <- ClassifyError(as.character(res$x), 
+                                    cellTypes_test = pancreas_cellTypes[[gsub(" ", "", strsplit(cases[i], "_")[[1]][2])]], 
+                                    cellTypes_train = pancreas_cellTypes[[gsub(" ", "", strsplit(cases[i], "_")[[1]][1])]])
+  singleR_res[[i]] <- table(factor(singleR_res[[i]], levels = errClass))/length(singleR_res[[i]])
+}
+
+
+names(singleR_res) <- cases
+singleR_res <- do.call(rbind, singleR_res)
+```
+
+
+## scPred
+
+```{r}
+
+
+files <- list.files("results/benchmarking_results/scPred/result/", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+scPred_res <- list()
+for (i in 1:length(cases)){
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/scPred/result/', cases[i], '_scPred_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/scPred/result/', cases[i], '_scPred_True.csv', sep = ""))
+  scPred_res[[i]] <- ClassifyError(as.character(res$x), 
+                                   cellTypes_test = pancreas_cellTypes[[strsplit(cases[i], "_")[[1]][2]]], 
+                                   cellTypes_train = pancreas_cellTypes[[strsplit(cases[i], "_")[[1]][1]]])
+  scPred_res[[i]] <- table(factor(scPred_res[[i]], levels = errClass))/length(scPred_res[[i]])
+}
+
+
+names(scPred_res) <- cases
+scPred_res <- do.call(rbind, scPred_res)
+```
+
+## scmap-cell
+
+```{r}
+
+files <- list.files("results/benchmarking_results/scmap/result", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+scmapCell_res <- list()
+for (i in 1:length(cases)){
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/scmap/result/', cases[i], '_scmapcell_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/scmap/result/', cases[i], '_scmapcell_True.csv', sep = ""))
+  scmapCell_res[[i]] <- ClassifyError(as.character(res$x), 
+                                      cellTypes_test = pancreas_cellTypes[[strsplit(cases[i], "_")[[1]][2]]], 
+                                      cellTypes_train = pancreas_cellTypes[[strsplit(cases[i], "_")[[1]][1]]])
+  scmapCell_res[[i]] <- table(factor(scmapCell_res[[i]], levels = errClass))/length(scmapCell_res[[i]])
+}
+
+
+names(scmapCell_res) <- cases
+scmapCell_res <- do.call(rbind, scmapCell_res)
+```
+
+
+## scmap-cluster
+
+```{r}
+
+
+files <- list.files("results/benchmarking_results/scmap/result", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+scmapCluster_res <- list()
+for (i in 1:length(cases)){
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/scmap/result/', cases[i], '_scmapcluster_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/scmap/result/', cases[i], '_scmapcluster_True.csv', sep = ""))
+  scmapCluster_res[[i]] <- ClassifyError(as.character(res$x), 
+                                         cellTypes_test = pancreas_cellTypes[[strsplit(cases[i], "_")[[1]][2]]], 
+                                         cellTypes_train = pancreas_cellTypes[[strsplit(cases[i], "_")[[1]][1]]])
+  scmapCluster_res[[i]] <- table(factor(scmapCluster_res[[i]], levels = errClass))/length(scmapCluster_res[[i]])
+}
+
+
+names(scmapCluster_res) <- cases
+scmapCluster_res <- do.call(rbind, scmapCluster_res)
+```
+
+## Garnett
+
+```{r}
+
+
+files <- list.files("results/benchmarking_results/Garnett/result", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+Garnett_res <- list()
+for (i in 1:length(cases)) {
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/Garnett/result/', cases[i], '_Garnett_CV_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/Garnett/result/', cases[i], '_Garnett_CV_True.csv', sep = ""))
+  Garnett_res[[i]] <- ClassifyError(as.character(res$x), 
+                                    cellTypes_test = pancreas_cellTypes[[strsplit(cases[i], "_")[[1]][2]]], 
+                                    cellTypes_train = pancreas_cellTypes[[strsplit(cases[i], "_")[[1]][1]]])
+  Garnett_res[[i]] <- table(factor(Garnett_res[[i]], levels = errClass))/length(Garnett_res[[i]])
+}
+
+
+names(Garnett_res) <- cases
+Garnett_res <- do.call(rbind, Garnett_res)
+```
+
+
+
+## singleCellNet
+
+```{r}
+
+
+files <- list.files("results/benchmarking_results/singlecellNet/", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+singleCellNet_res <- list()
+for (i in 1:length(cases)) {
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/singlecellNet/', cases[i], '_singleCellNet_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/singlecellNet/', cases[i], '_singleCellNet_True.csv', sep = ""))
+  singleCellNet_res[[i]] <- ClassifyError(as.character(res$x[1:length(true$x)]), 
+                                          cellTypes_test = pancreas_cellTypes[[strsplit(cases[i], "_")[[1]][2]]], 
+                                          cellTypes_train = pancreas_cellTypes[[strsplit(cases[i], "_")[[1]][1]]])
+  singleCellNet_res[[i]] <- table(factor(singleCellNet_res[[i]], levels = errClass))/length(singleCellNet_res[[i]])
+}
+
+
+names(singleCellNet_res) <- cases
+singleCellNet_res <- do.call(rbind, singleCellNet_res)
+```
+
+## scVI
+
+```{r}
+
+
+files <- list.files("results/benchmarking_results/scVI/result", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+cases <- cases[!grepl(".csv", cases)]
+scVI_res <- list()
+for (i in 1:length(cases)) {
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/scVI/result/', cases[i], '_scVI_Pred_map.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/scVI/result/', cases[i], '_scVI_True_map.csv', sep = ""))
+  # scVI_res[[i]] <- sum(res$X0 == true$X0)/length(res$X0)
+  scVI_res[[i]] <- ClassifyError(as.character(res$X0),
+                                 cellTypes_test = true$X0,
+                                 cellTypes_train = pancreas_cellTypes[[strsplit(cases[i], "_")[[1]][1]]])
+  scVI_res[[i]] <- table(factor(scVI_res[[i]], levels = errClass))/length(scVI_res[[i]])
+}
+
+
+names(scVI_res) <- cases
+scVI_res <- do.call(rbind, scVI_res)
+
+```
+
+
+## Moana
+
+```{r}
+
+
+files <- list.files("results/benchmarking_results/moana/result/", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+moana_res <- list()
+for (i in 1:length(cases)) {
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/moana/result/', cases[i], '_moana_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/moana/result/', cases[i], '_moana_True.csv', sep = ""))
+  moana_res[[i]] <- ClassifyError(as.character(res$Predicted.cell.type), 
+                                  cellTypes_test = pancreas_cellTypes[[strsplit(cases[i], "_")[[1]][2]]], 
+                                  cellTypes_train = pancreas_cellTypes[[strsplit(cases[i], "_")[[1]][1]]])
+  moana_res[[i]] <- table(factor(moana_res[[i]], levels = errClass))/length(moana_res[[i]])
+}
+
+
+names(moana_res) <- cases
+moana_res <- do.call(rbind, moana_res)
+```
+
+
+
+
+
+# Garnett DE
+
+```{r}
+
+
+files <- list.files("results/benchmarking_results/Garnett_DE/", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+Garnett_DE_res <- list()
+for (i in 1:length(cases)) {
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/Garnett_DE/', cases[i], '_Garnett_DE_Pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/Garnett_DE/', cases[i], '_Garnett_DE_True.csv', sep = ""))
+  Garnett_DE_res[[i]] <- ClassifyError(as.character(res$x), 
+                                       cellTypes_test = pancreas_cellTypes[[strsplit(cases[i], "_")[[1]][2]]], 
+                                       cellTypes_train = pancreas_cellTypes[[strsplit(cases[i], "_")[[1]][1]]])
+  Garnett_DE_res[[i]] <- table(factor(Garnett_DE_res[[i]], levels = errClass))/length(Garnett_DE_res[[i]])
+}
+
+
+names(Garnett_DE_res) <- cases
+Garnett_DE_res <- do.call(rbind, Garnett_DE_res)
+```
+
+
+## SVM
+
+```{r}
+
+
+files <- list.files("results/benchmarking_results/SVM_reject/", pattern = ".csv")
+cases <- unique(unlist(lapply(strsplit(files, "_"), function(x) paste(x[1], x[2], sep = "_"))))
+
+SVM_reject_res <- list()
+for (i in 1:length(cases)) {
+  # print(cases[i])
+  res <- read.csv(paste('results/benchmarking_results/SVM_reject/', cases[i], '_SVMreject_pred.csv', sep = ""))
+  true <- read.csv(paste('results/benchmarking_results/SVM_reject/', cases[i], '_SVMreject_true.csv', sep = ""))
+  SVM_reject_res[[i]] <- ClassifyError(as.character(res$X0), 
+                                       cellTypes_test = pancreas_cellTypes[[strsplit(cases[i], "_")[[1]][2]]], 
+                                       cellTypes_train = pancreas_cellTypes[[strsplit(cases[i], "_")[[1]][1]]])
+  SVM_reject_res[[i]] <- table(factor(SVM_reject_res[[i]], levels = errClass))/length(SVM_reject_res[[i]])
+}
+
+
+names(SVM_reject_res) <- cases
+SVM_reject_res <- do.call(rbind, SVM_reject_res)
+```
+
+
+
+## scClassify
+
+```{r}
+scClassify_res <- scClassify_res_pancreas_pearson
+scClassifyEnsemble_res <- ensemble_res_final_weights
+```
+
+# Evaluation
+
+
+
+```{r}
+sce_list <- list(baron = baron,
+                 muraro = muraro2,
+                 segerstolpe = segerstolpe,
+                 lawlor = lawlor,
+                 xin = xin,
+                 wang = wang)
+cellTypes_num <- unlist(lapply(sce_list, function(x) length(unique(x$cellTypes))))
+combination <- combn(names(sce_list), 2)
+combination <- cbind(combination, combination[c(2, 1), ])
+datasetCharacterise <- cbind(cellTypes_num[combination[1, ]],
+                             cellTypes_num[combination[2, ]])
+rownames(datasetCharacterise) <- paste(combination[1, ], combination[2, ], sep = "_")
+testLargeTrain <- rownames(datasetCharacterise)[datasetCharacterise[,1] - datasetCharacterise[,2] < 0]
+saveRDS(testLargeTrain, file = "results/pancreas_testLargeTrain.rds")
+```
+
+
+```{r}
+all_res <- list(scClassify = scClassify_res,
+                scClassify_ensemble = scClassifyEnsemble_res,
+                singleR = singleR_res,
+                moana = moana_res,
+                singlecellNet = singleCellNet_res,
+                ACTINN = ACTINN_res,
+                scVI = scVI_res,
+                CHETAH = CHETAH_res,
+                scID = scID_res,
+                Garnett = Garnett_res,
+                scmapCell = scmapCell_res,
+                scmapCluster = scmapCluster_res,
+                scPred = scPred_res,
+                Garnett_DE = Garnett_DE_res,
+                SVM_reject = SVM_reject_res,
+                CaSTLe = Castle_res
+)
+
+rownames(all_res$scClassify) <- gsub("muraro", "muraro2", rownames(all_res$scClassify))
+rownames(all_res$singleR) <- gsub(" ", "", rownames(all_res$singleR))
+
+all_res <- lapply(all_res, function(x){
+  x <- data.frame(x)
+  x$Experiment <- rownames(x)
+  x$Accuracy <- x[,"correct"] + x[,"correctly.unassigned"]
+  x$Accuracy_withIntermediate <- x[,"correct"] + x[,"correctly.unassigned"] + x[,"intermediate"]
+  x
+})
+
+saveRDS(all_res, "results/pancreas_evaluaRes.rds")
+
+
+df_toPlot <- melt(all_res)
+colnames(df_toPlot) <- c("Experiment", "errClass", "value", "Method")
+df_toPlot$Method <- factor(as.character(df_toPlot$Method), levels = names(all_res))
+
+df_toPlot$Hard <- as.character(df_toPlot$Experiment) %in% testLargeTrain
+df_toPlot$Hard <- ifelse(df_toPlot$Hard, "Hard", "Easy")
+
+```
+
+```{r}
+method_col <- c(tableau_color_pal("Tableau 20")(20)[c(11)], tableau_color_pal("Classic 20")(7)[7], tableau_color_pal("Tableau 20")(20)[c(1:10, 13:20)])
+```
+
+
+```{r}
+ggplot(df_toPlot[df_toPlot$errClass == "Accuracy_withIntermediate",], aes(x = Method, y = value, color = Method)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(position = position_jitter(seed = 1), alpha = 0.6, size = 1.5) +
+  scale_color_manual(values = method_col) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  theme(plot.title = element_text(hjust = 0.5),
+        text = element_text(size=12),
+        panel.border = element_rect(colour = "black", fill=NA, size=1.2)) +
+  facet_wrap(~Hard) +
+  ylab("Accuracy Rate (Including intermediate)") +
+  theme(legend.position = "bottom", text = element_text(size = 14, face = "bold"), axis.text.x = element_blank())
+ggsave("figures/Figure2A_pancreasSix_evaluation_easyHard.pdf", width = 9, height = 6)
+```
+
+
+# Hyperparameter investigation
+
+## KNN's K
+
+```{r}
+load("results/pancreas_k_evaluation.RData")
+```
+
+
+```{r}
+df_toPlot <- rbind(melt(lapply(baron_scClassify_res_k_list, function(x) {
+  x <- data.frame(x)
+  x$accuracy_rate <- x[,1] + x[,2] + x[, 3]
+  x$case <- paste("baron", rownames(x), sep = "_")
+  melt(x)
+})),
+melt(lapply(segerstolpe_scClassify_res_k_list, function(x) {
+  x <- data.frame(x)
+  x$accuracy_rate <- x[,1] + x[,2] + x[, 3]
+  x$case <- paste("segerstolpe", rownames(x), sep = "_")
+  melt(x)
+})),
+melt(lapply(wang_scClassify_res_k_list, function(x) {
+  x <- data.frame(x)
+  x$accuracy_rate <- x[,1] + x[,2] + x[, 3]
+  x$case <- paste("wang", rownames(x), sep = "_")
+  melt(x)
+})),
+melt(lapply(lawlor_scClassify_res_k_list, function(x) {
+  x <- data.frame(x)
+  x$accuracy_rate <- x[,1] + x[,2] + x[, 3]
+  x$case <- paste("lawlor", rownames(x), sep = "_")
+  melt(x)
+})),
+melt(lapply(xin_scClassify_res_k_list, function(x) {
+  x <- data.frame(x)
+  x$accuracy_rate <- x[,1] + x[,2] + x[, 3]
+  x$case <- paste("xin", rownames(x), sep = "_")
+  melt(x)
+})),
+melt(lapply(muraro_scClassify_res_k_list, function(x) {
+  x <- data.frame(x)
+  x$accuracy_rate <- x[,1] + x[,2] + x[, 3]
+  x$case <- paste("muraro", rownames(x), sep = "_")
+  melt(x)
+})))
+```
+
+
+```{r}
+
+df_toPlot$hard <- ifelse(df_toPlot$case %in% testLargeTrain, "Hard", "Easy")
+```
+
+```{r}
+
+ggplot(df_toPlot[df_toPlot$variable == "accuracy_rate", ], aes(x = L1, y = value, color = L1)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(position = position_jitter(seed = 1), alpha = 0.6, size = 1.5) +
+  facet_grid(~hard) +
+  ylab("Classification Accuracy") +
+  scale_color_viridis_d(alpha = 0.5, end = 0.9, direction = -1) +
+  xlab("") +
+  ylim(c(0, 1)) +
+  theme_bw()  +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  theme(plot.title = element_text(hjust = 0.5),
+        text = element_text(size=12),
+        panel.border = element_rect(colour = "black", fill=NA, size=1.2))+
+  theme(legend.position = "none", text = element_text(size = 14, face = "bold"))
+ggsave("figures/FigureEV2C_pancreasSix_k_evaluation_accuracy_easyHard.pdf", width = 10, height = 6)
+
+
+```
+
+
+## Correlation Threshold
+
+```{r}
+load("results/pancreas_cor_evaluation.RData")
+```
+
+
+
+```{r}
+df_toPlot_cor <- rbind(melt(lapply(baron_scClassify_res_cor_list, function(x) {
+  x <- data.frame(x)
+  x$accuracy_rate <- x[,1] + x[,2] + x[, 3]
+  x$case <- paste("baron", rownames(x), sep = "_")
+  melt(x)
+})),
+melt(lapply(segerstolpe_scClassify_res_cor_list, function(x) {
+  x <- data.frame(x)
+  x$accuracy_rate <- x[,1] + x[,2] + x[, 3]
+  x$case <- paste("segerstolpe", rownames(x), sep = "_")
+  melt(x)
+})),
+melt(lapply(wang_scClassify_res_cor_list, function(x) {
+  x <- data.frame(x)
+  x$accuracy_rate <- x[,1] + x[,2] + x[, 3]
+  x$case <- paste("wang", rownames(x), sep = "_")
+  melt(x)
+})),
+melt(lapply(lawlor_scClassify_res_cor_list, function(x) {
+  x <- data.frame(x)
+  x$accuracy_rate <- x[,1] + x[,2] + x[, 3]
+  x$case <- paste("lawlor", rownames(x), sep = "_")
+  melt(x)
+})),
+melt(lapply(xin_scClassify_res_cor_list, function(x) {
+  x <- data.frame(x)
+  x$accuracy_rate <- x[,1] + x[,2] + x[, 3]
+  x$case <- paste("xin", rownames(x), sep = "_")
+  melt(x)
+})),
+melt(lapply(muraro_scClassify_res_cor_list, function(x) {
+  x <- data.frame(x)
+  x$accuracy_rate <- x[,1] + x[,2] + x[, 3]
+  x$case <- paste("muraro", rownames(x), sep = "_")
+  melt(x)
+})))
+```
+
+
+```{r}
+
+
+df_toPlot_cor$hard <- ifelse(df_toPlot_cor$case %in% testLargeTrain, "Hard", "Easy")
+```
+
+```{r}
+df_toPlot_original <- df_toPlot[df_toPlot$L1 == "k=10", ]
+df_toPlot_original$L1 <- "dynamic"
+```
+
+```{r}
+df_toPlot_cor <- rbind(df_toPlot_original, df_toPlot_cor)
+df_toPlot_cor$L1 <- factor(df_toPlot_cor$L1, levels = unique(df_toPlot_cor$L1))
+
+ggplot(df_toPlot_cor[df_toPlot_cor$variable == "accuracy_rate", ], aes(x = L1, y = value, color = L1)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(position = position_jitter(seed = 1), alpha = 0.6, size = 1.5) +
+  facet_grid(~hard) +
+  ylab("Classification Accuracy") +
+  scale_color_viridis_d(alpha = 0.5, end = 0.85, direction = -1) +
+  xlab("") +
+  ylim(c(0, 1)) +
+  theme_bw()  +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  theme(plot.title = element_text(hjust = 0.5),
+        text = element_text(size=12),
+        panel.border = element_rect(colour = "black", fill=NA, size=1.2))+
+  theme(legend.position = "none", text = element_text(size = 14, face = "bold"))
+ggsave("figures/FigureEV2D_pancreasSix_cor_evaluation_accuracy_easyHard.pdf", width = 12, height = 6)
+
+
+
+```
+
+
+
+
+
+```{r}
+load("results/pancreas_hopach_kmax_evaluation.RData")
+```
+
+
+
+```{r}
+df_toPlot_hopach_kmax <- rbind(melt(lapply(baron_scClassify_res_hopach_kmax_list, function(x) {
+  x <- data.frame(x)
+  x$accuracy_rate <- x[,1] + x[,2] + x[, 3]
+  x$case <- paste("baron", rownames(x), sep = "_")
+  melt(x)
+})),
+melt(lapply(segerstolpe_scClassify_res_hopach_kmax_list, function(x) {
+  x <- data.frame(x)
+  x$accuracy_rate <- x[,1] + x[,2] + x[, 3]
+  x$case <- paste("segerstolpe", rownames(x), sep = "_")
+  melt(x)
+})),
+melt(lapply(wang_scClassify_res_hopach_kmax_list, function(x) {
+  x <- data.frame(x)
+  x$accuracy_rate <- x[,1] + x[,2] + x[, 3]
+  x$case <- paste("wang", rownames(x), sep = "_")
+  melt(x)
+})),
+melt(lapply(lawlor_scClassify_res_hopach_kmax_list, function(x) {
+  x <- data.frame(x)
+  x$accuracy_rate <- x[,1] + x[,2] + x[, 3]
+  x$case <- paste("lawlor", rownames(x), sep = "_")
+  melt(x)
+})),
+melt(lapply(xin_scClassify_res_hopach_kmax_list, function(x) {
+  x <- data.frame(x)
+  x$accuracy_rate <- x[,1] + x[,2] + x[, 3]
+  x$case <- paste("xin", rownames(x), sep = "_")
+  melt(x)
+})),
+melt(lapply(muraro_scClassify_res_hopach_kmax_list, function(x) {
+  x <- data.frame(x)
+  x$accuracy_rate <- x[,1] + x[,2] + x[, 3]
+  x$case <- paste("muraro", rownames(x), sep = "_")
+  melt(x)
+})))
+```
+
+
+
+```{r}
+
+testLargeTrain <- rownames(datasetCharacterise)[datasetCharacterise[,1] - datasetCharacterise[,2] < 0]
+
+df_toPlot_hopach_kmax$hard <- ifelse(df_toPlot_hopach_kmax$case %in% testLargeTrain, "Hard", "Easy")
+```
+
+
+```{r}
+
+ggplot(df_toPlot_hopach_kmax[df_toPlot_hopach_kmax$variable == "accuracy_rate", ], aes(x = L1, y = value, color = L1)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(position = position_jitter(seed = 1), alpha = 0.6, size = 1.5) +
+  facet_grid(~hard) +
+  ylab("Classification Accuracy") +
+  scale_color_viridis_d(alpha = 0.5, end = 0.85, direction = -1) +
+  xlab("") +
+  ylim(c(0, 1)) +
+  theme_bw()  +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  theme(plot.title = element_text(hjust = 0.5),
+        text = element_text(size=12),
+        panel.border = element_rect(colour = "black", fill=NA, size=1.2)) +
+  theme(legend.position = "none", text = element_text(size = 14, face = "bold"))
+ggsave("figures/AppendixFigS3_pancreasSix_hopach_kmax_accuracy_easyHard.pdf", width = 12, height = 6)
+
+
+
+```
+
+
+
+```{r}
+load("results/pancreas_hopach_subset_evaluation.RData")
+```
+
+
+```{r}
+df_toPlot <- rbind(melt(lapply(baron_scClassify_res_hopach_subset_list, function(x) {
+  x <- data.frame(x)
+  x$accuracy_rate <- x[,1] + x[,2] + x[, 3]
+  x$case <- paste("baron", rownames(x), sep = "_")
+  melt(x)
+})),
+melt(lapply(segerstolpe_scClassify_res_hopach_subset_list, function(x) {
+  x <- data.frame(x)
+  x$accuracy_rate <- x[,1] + x[,2] + x[, 3]
+  x$case <- paste("segerstolpe", rownames(x), sep = "_")
+  melt(x)
+})),
+melt(lapply(wang_scClassify_res_hopach_subset_list, function(x) {
+  x <- data.frame(x)
+  x$accuracy_rate <- x[,1] + x[,2] + x[, 3]
+  x$case <- paste("wang", rownames(x), sep = "_")
+  melt(x)
+})),
+melt(lapply(lawlor_scClassify_res_hopach_subset_list, function(x) {
+  x <- data.frame(x)
+  x$accuracy_rate <- x[,1] + x[,2] + x[, 3]
+  x$case <- paste("lawlor", rownames(x), sep = "_")
+  melt(x)
+})),
+melt(lapply(xin_scClassify_res_hopach_subset_list, function(x) {
+  x <- data.frame(x)
+  x$accuracy_rate <- x[,1] + x[,2] + x[, 3]
+  x$case <- paste("xin", rownames(x), sep = "_")
+  melt(x)
+})),
+melt(lapply(muraro_scClassify_res_hopach_subset_list, function(x) {
+  x <- data.frame(x)
+  x$accuracy_rate <- x[,1] + x[,2] + x[, 3]
+  x$case <- paste("muraro", rownames(x), sep = "_")
+  melt(x)
+})))
+```
+
+
+```{r}
+df_toPlot$hard <- ifelse(df_toPlot$case %in% testLargeTrain, "Hard", "Easy")
+```
+
+```{r}
+scClassify_res <- data.frame(scClassify_res_pancreas_pearson)
+scClassify_res$Experiment <- rownames(scClassify_res)
+scClassify_res$Accuracy <- scClassify_res[, 1] + scClassify_res[, 2] + scClassify_res[, 3] 
+
+ggplot(df_toPlot[df_toPlot$variable == "accuracy_rate", ], aes(x = case, y = value, color = case)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(position = position_jitter(seed = 1), alpha = 0.6, size = 1.5) +
+  geom_point(data = scClassify_res, aes(x = Experiment, y = Accuracy), col = "red") +
+  #facet_grid(~hard) +
+  ylab("Classification Accuracy") +
+  scale_color_viridis_d(alpha = 0.5, end = 0.9, direction = -1) +
+  xlab("") +
+  ylim(c(0, 1)) +
+  theme_bw()  +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  theme(plot.title = element_text(hjust = 0.5),
+        text = element_text(size=12),
+        panel.border = element_rect(colour = "black", fill=NA, size=1.2))+
+  theme(legend.position = "none", text = element_text(size = 14, face = "bold"),
+        axis.text.x = element_text(angle = 90, hjust = 1),
+        aspect.ratio = 1) 
+
+
+ggsave("figures/FigureEV2B_pancreasSix_subsample_evaluation_accuracy_overall.pdf", width = 6, height = 6)
+
+```
+
+# Wang-muraro tSNE plots
+
+
+
+
+```{r}
+set.seed(2019)
+muraro2 <- runTSNE(muraro2)
+tsne_muraro2 <- reducedDim(muraro2, "TSNE")
+```
+
+
+
+```{r}
+
+
+df_toPlot_muraro <- data.frame(tSNE1 = tsne_muraro2[,1], tSNE2 = tsne_muraro2[,2], 
+                               cellTypes = muraro2$cellTypes,
+                               scClassify = as.character(wang_ensemble_res_weights$muraro$cellTypes),
+                               ensemble_scores = wang_ensemble_res_weights$muraro$scores)
+
+df_toPlot_muraro$scClassify <- as.character(df_toPlot_muraro$scClassify)
+
+df_toPlot_muraro$scClassify[unlist(lapply(strsplit(df_toPlot_muraro$scClassify, "_"), length))>1] <- "intermediate"
+
+df_toPlot_muraro$scClassify <- factor(df_toPlot_muraro$scClassify,
+                                      levels = c(unique(df_toPlot_muraro$scClassify[!df_toPlot_muraro$scClassify %in% c("intermediate", "unassigned")]),
+                                                 "intermediate", "unassigned"))
+
+cellTypes_muraro_colour <- c(tableau_color_pal("Tableau 10")(9), tableau_color_pal("Tableau 20")(14)[c(14, 13)])
+names(cellTypes_muraro_colour) <- c(names(table(muraro2$cellTypes)), "intermediate", "unassigned")
+```
+
+
+
+
+```{r}
+theme_yx <- function() {
+  theme_bw() +
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+    theme(plot.title = element_text(hjust = 0.5),
+          text = element_text(size=12),
+          panel.border = element_rect(colour = "black", fill=NA, size=1.2)) 
+  
+}
+
+g_original <- ggplot(df_toPlot_muraro, aes(x = tSNE1, y = tSNE2, color = cellTypes)) +
+  geom_point() +
+  scale_color_manual(values = cellTypes_muraro_colour[levels(df_toPlot_muraro$cellTypes)]) +
+  theme_yx() +
+  theme(aspect.ratio = 1, legend.position = "bottom") +
+  labs(title = "Original Label") 
+
+g_original
+
+
+g_scClassify <- ggplot(df_toPlot_muraro, aes(x = tSNE1, y = tSNE2, color = scClassify)) +
+  geom_point() +
+  scale_color_manual(values = cellTypes_muraro_colour[levels(df_toPlot_muraro$scClassify)]) +
+  theme_yx() +
+  theme(aspect.ratio = 1, legend.position = "bottom") +
+  labs(title = "scClassify") 
+
+g_scClassify
+
+actinn_res <- read.csv(paste('results/benchmarking_results/ACTINN/result/wang_muraro2_ACTINN_Pred.csv', sep = ""))
+df_toPlot_muraro$actinn_res <- actinn_res$X0
+
+table(df_toPlot_muraro$actinn_res, df_toPlot_muraro$cellTypes)
+
+g_actinn <- ggplot(df_toPlot_muraro, aes(x = tSNE1, y = tSNE2, color = actinn_res)) +
+  geom_point() +
+  scale_color_manual(values = cellTypes_muraro_colour[levels(df_toPlot_muraro$actinn_res)]) +
+  theme_yx() +
+  theme(aspect.ratio = 1, legend.position = "bottom") +
+  labs(title = "ACTINN") 
+
+
+singler_res <- read.csv('results/benchmarking_results/SingleR/result/wang _ muraro2 _SingleR_Pred.csv')
+df_toPlot_muraro$singler_res <- singler_res$x
+
+table(df_toPlot_muraro$singler_res, df_toPlot_muraro$cellTypes)
+
+g_singleR <- ggplot(df_toPlot_muraro, aes(x = tSNE1, y = tSNE2, color = singler_res)) +
+  geom_point() +
+  scale_color_manual(values = cellTypes_muraro_colour[levels(df_toPlot_muraro$singler_res)]) +
+  theme_yx() +
+  theme(aspect.ratio = 1, legend.position = "bottom") +
+  labs(title = "SingleR") 
+
+
+
+
+
+moana_res <- read.csv('results/benchmarking_results/moana/result/wang_muraro2_moana_Pred.csv')
+df_toPlot_muraro$moana_res <- moana_res$Predicted.cell.type
+
+table(df_toPlot_muraro$moana_res, df_toPlot_muraro$cellTypes)
+
+g_moana <- ggplot(df_toPlot_muraro, aes(x = tSNE1, y = tSNE2, color = moana_res)) +
+  geom_point() +
+  scale_color_manual(values = cellTypes_muraro_colour[levels(df_toPlot_muraro$moana_res)]) +
+  theme_yx() +
+  theme(aspect.ratio = 1, legend.position = "bottom") +
+  labs(title = "moana") 
+
+
+singlecellNet_res <- read.csv('results/benchmarking_results/singlecellNet/wang_muraro2_singleCellNet_Pred.csv')
+# singlecellNet_true <- read.csv('/Volumes/HD/iMACdropbox/Dropbox (Sydney Uni)/scclassify/singlecellNet/wang_muraro_singleCellNet_True.csv')
+df_toPlot_muraro$singlecellNet_res <- singlecellNet_res$x[1:nrow(df_toPlot_muraro)]
+df_toPlot_muraro$singlecellNet_res <- as.character(df_toPlot_muraro$singlecellNet_res )
+df_toPlot_muraro$singlecellNet_res[df_toPlot_muraro$singlecellNet_res  == "rand"] <- "unassigned"
+table(df_toPlot_muraro$singlecellNet_res, df_toPlot_muraro$cellTypes)
+df_toPlot_muraro$singlecellNet_res <- as.factor(df_toPlot_muraro$singlecellNet_res )
+g_singlecellNet <- ggplot(df_toPlot_muraro, aes(x = tSNE1, y = tSNE2, color = singlecellNet_res)) +
+  geom_point() +
+  scale_color_manual(values = cellTypes_muraro_colour[levels(df_toPlot_muraro$singlecellNet_res)]) +
+  theme_yx() +
+  theme(aspect.ratio = 1, legend.position = "bottom") +
+  labs(title = "singlecellNet") 
+
+
+
+
+
+CHETAH_res <- read.csv('results/benchmarking_results/CHETAH/pancreas/wang_muraro2_CHETAH_Pred.csv')
+# CHETAH_true <- read.csv('/Volumes/HD/iMACdropbox/Dropbox (Sydney Uni)/scclassify/CHETAH/wang_muraro_CHETAH_True.csv')
+df_toPlot_muraro$CHETAH_res <- CHETAH_res$x
+df_toPlot_muraro$CHETAH_res <- as.character(df_toPlot_muraro$CHETAH_res )
+table(df_toPlot_muraro$CHETAH_res, df_toPlot_muraro$cellTypes)
+
+df_toPlot_muraro$CHETAH_res[unlist(lapply(strsplit(as.character(df_toPlot_muraro$CHETAH_res), "_"), length))>1] <- "intermediate"
+df_toPlot_muraro$CHETAH_res[df_toPlot_muraro$CHETAH_res  == "Unassigned"] <- "unassigned"
+df_toPlot_muraro$CHETAH_res <- factor(df_toPlot_muraro$CHETAH_res,
+                                      levels = c(unique(df_toPlot_muraro$CHETAH_res[!df_toPlot_muraro$CHETAH_res%in%c("intermediate", "unassigned")]),
+                                                 "intermediate", "unassigned"))
+
+
+g_CHETAH <- ggplot(df_toPlot_muraro, aes(x = tSNE1, y = tSNE2, color = CHETAH_res)) +
+  geom_point() +
+  scale_color_manual(values = cellTypes_muraro_colour[levels(df_toPlot_muraro$CHETAH_res)]) +
+  theme_yx() +
+  theme(aspect.ratio = 1, legend.position = "bottom") +
+  labs(title = "CHETAH") 
+
+
+
+
+
+
+
+scID_res <- read.csv('results/benchmarking_results/scID/wang_muraro2_scID_Pred.csv')
+# scID_true <- read.csv('/Volumes/HD/iMACdropbox/Dropbox (Sydney Uni)/scclassify/scID/wang_muraro_scID_True.csv')
+df_toPlot_muraro$scID_res <- scID_res$x
+df_toPlot_muraro$scID_res <- as.character(df_toPlot_muraro$scID_res )
+table(df_toPlot_muraro$scID_res, df_toPlot_muraro$cellTypes)
+
+df_toPlot_muraro$scID_res[unlist(lapply(strsplit(as.character(df_toPlot_muraro$scID_res), "_"), length))>1] <- "intermediate"
+df_toPlot_muraro$scID_res[df_toPlot_muraro$scID_res  == "Unassigned"] <- "unassigned"
+df_toPlot_muraro$scID_res <- factor(df_toPlot_muraro$scID_res,
+                                    levels = c(unique(df_toPlot_muraro$scID_res[!df_toPlot_muraro$scID_res%in%c("intermediate", "unassigned")]),
+                                               "intermediate", "unassigned"))
+
+
+g_scID <- ggplot(df_toPlot_muraro, aes(x = tSNE1, y = tSNE2, color = scID_res)) +
+  geom_point() +
+  scale_color_manual(values = cellTypes_muraro_colour[levels(df_toPlot_muraro$scID_res)]) +
+  theme_yx() +
+  theme(aspect.ratio = 1, legend.position = "bottom") +
+  labs(title = "scID") 
+
+
+
+
+Garnett_res <- read.csv('results/benchmarking_results/Garnett/result/wang_muraro2_Garnett_CV_Pred.csv')
+# Garnett_true <- read.csv('/Volumes/HD/iMACdropbox/Dropbox (Sydney Uni)/scclassify/Garnett/wang_muraro_Garnett_True.csv')
+df_toPlot_muraro$Garnett_res <- Garnett_res$x
+df_toPlot_muraro$Garnett_res <- as.character(df_toPlot_muraro$Garnett_res )
+table(df_toPlot_muraro$Garnett_res, df_toPlot_muraro$cellTypes)
+
+df_toPlot_muraro$Garnett_res[df_toPlot_muraro$Garnett_res  == "Unknown"] <- "unassigned"
+
+df_toPlot_muraro$Garnett_res <- as.factor(df_toPlot_muraro$Garnett_res )
+
+g_Garnett <- ggplot(df_toPlot_muraro, aes(x = tSNE1, y = tSNE2, color = Garnett_res)) +
+  geom_point() +
+  scale_color_manual(values = cellTypes_muraro_colour[levels(df_toPlot_muraro$Garnett_res)]) +
+  theme_yx() +
+  theme(aspect.ratio = 1, legend.position = "bottom") +
+  labs(title = "Garnett") 
+
+
+
+
+scmapCell_res <- read.csv('results/benchmarking_results/scmap/result/wang_muraro2_scmapcell_Pred.csv')
+
+df_toPlot_muraro$scmapCell_res <- scmapCell_res$x
+df_toPlot_muraro$scmapCell_res <- as.factor(df_toPlot_muraro$scmapCell_res )
+
+
+
+g_scmapCell <- ggplot(df_toPlot_muraro, aes(x = tSNE1, y = tSNE2, color = scmapCell_res)) +
+  geom_point() +
+  scale_color_manual(values = cellTypes_muraro_colour[levels(df_toPlot_muraro$scmapCell_res)]) +
+  theme_yx() +
+  theme(aspect.ratio = 1, legend.position = "bottom") +
+  labs(title = "scmapCell") 
+
+
+
+
+scmapCluster_res <- read.csv('results/benchmarking_results/scmap/result/wang_muraro2_scmapcluster_Pred.csv')
+
+df_toPlot_muraro$scmapCluster_res <- scmapCluster_res$x
+df_toPlot_muraro$scmapCluster_res <- as.factor(df_toPlot_muraro$scmapCluster_res )
+
+
+
+g_scmapCluster <- ggplot(df_toPlot_muraro, aes(x = tSNE1, y = tSNE2, color = scmapCluster_res)) +
+  geom_point() +
+  scale_color_manual(values = cellTypes_muraro_colour[levels(df_toPlot_muraro$scmapCluster_res)]) +
+  theme_yx() +
+  theme(aspect.ratio = 1, legend.position = "bottom") +
+  labs(title = "scmapCluster") 
+
+
+
+scPred_res <- read.csv('results/benchmarking_results/scPred/result/wang_muraro2_scPred_Pred.csv')
+df_toPlot_muraro$scPred_res <- scPred_res$x
+df_toPlot_muraro$scPred_res <- as.factor(df_toPlot_muraro$scPred_res )
+
+
+g_scPred <- ggplot(df_toPlot_muraro, aes(x = tSNE1, y = tSNE2, color = scPred_res)) +
+  geom_point() +
+  scale_color_manual(values = cellTypes_muraro_colour[levels(df_toPlot_muraro$scPred_res)]) +
+  theme_yx() +
+  theme(aspect.ratio = 1, legend.position = "bottom") +
+  labs(title = "scPred") 
+
+
+
+Garnett_DE_res <- read.csv('results/benchmarking_results/Garnett_DE/wang_muraro2_Garnett_DE_Pred.csv')
+
+df_toPlot_muraro$Garnett_DE_res <- Garnett_DE_res$x
+
+df_toPlot_muraro$Garnett_DE_res <- as.character(df_toPlot_muraro$Garnett_DE_res)
+df_toPlot_muraro$Garnett_DE_res[df_toPlot_muraro$Garnett_DE_res  == "Unknown"] <- "unassigned"
+
+df_toPlot_muraro$Garnett_DE_res <- as.factor(df_toPlot_muraro$Garnett_DE_res )
+
+
+g_Garnett_DE <- ggplot(df_toPlot_muraro, aes(x = tSNE1, y = tSNE2, color = Garnett_DE_res)) +
+  geom_point() +
+  scale_color_manual(values = cellTypes_muraro_colour[levels(df_toPlot_muraro$Garnett_DE_res)]) +
+  theme_yx() +
+  theme(aspect.ratio = 1, legend.position = "bottom") +
+  labs(title = "Garnett_DE") 
+
+
+
+
+
+SVM_reject_res <- read.csv('results/benchmarking_results/SVM_reject/wang_muraro2_SVMreject_pred.csv')
+df_toPlot_muraro$SVM_reject_res <- SVM_reject_res$X0
+df_toPlot_muraro$SVM_reject_res <- as.character(df_toPlot_muraro$SVM_reject_res)
+df_toPlot_muraro$SVM_reject_res[df_toPlot_muraro$SVM_reject_res  == "Unassign"] <- "unassigned"
+
+df_toPlot_muraro$SVM_reject_res <- as.factor(df_toPlot_muraro$SVM_reject_res)
+
+
+
+
+g_SVM_reject <- ggplot(df_toPlot_muraro, aes(x = tSNE1, y = tSNE2, color = SVM_reject_res)) +
+  geom_point() +
+  scale_color_manual(values = cellTypes_muraro_colour[levels(df_toPlot_muraro$SVM_reject_res)]) +
+  theme_yx() +
+  theme(aspect.ratio = 1, legend.position = "bottom") +
+  labs(title = "SVM_reject") 
+
+
+
+
+
+
+Catsle_res <- read.csv('results/benchmarking_results/CaSTLe//result/wang_muraro2_Pred_CaSTLe.csv')
+df_toPlot_muraro$Catsle_res <- Catsle_res$x
+df_toPlot_muraro$Catsle_res <- as.factor(df_toPlot_muraro$Catsle_res )
+
+
+
+g_Catsle <- ggplot(df_toPlot_muraro, aes(x = tSNE1, y = tSNE2, color = Catsle_res)) +
+  geom_point() +
+  scale_color_manual(values = cellTypes_muraro_colour[levels(df_toPlot_muraro$Catsle_res)]) +
+  theme_yx() +
+  theme(aspect.ratio = 1, legend.position = "bottom") +
+  labs(title = "Catsle") 
+
+
+
+
+
+pdf("figures/AppendixFigureS1_wang_muraro_tSNE_allMethods.pdf", width = 18, height = 18)
+ggarrange(g_original + theme(text = element_text(size = 14)), 
+          g_scClassify  + theme(text = element_text(size = 14)), 
+          g_singleR + theme(text = element_text(size = 14)), 
+          g_moana + theme(text = element_text(size = 14)), 
+          g_singlecellNet + theme(text = element_text(size = 14)), 
+          g_actinn + theme(text = element_text(size = 14)), 
+          g_CHETAH + theme(text = element_text(size = 14)), 
+          g_scID + theme(text = element_text(size = 14)), 
+          g_Garnett + theme(text = element_text(size = 14)),
+          g_Garnett_DE + theme(text = element_text(size = 14)),
+          g_scmapCell + theme(text = element_text(size = 14)), 
+          g_scmapCluster + theme(text = element_text(size = 14)), 
+          g_scPred + theme(text = element_text(size = 14)), 
+          g_SVM_reject + theme(text = element_text(size = 14)), 
+          g_Catsle + theme(text = element_text(size = 14)), 
+          ncol = 3, nrow = 5, align = "hv")
+dev.off()
+```
+
+
+
+
+
+
+
+# Post-clustering
+
+```{r}
+library(limma)
+doLimma <- function(exprsMat, cellTypes, exprs_pct = 0.05){
+  
+  cellTypes <- droplevels(as.factor(cellTypes))
+  tt <- list()
+  for (i in 1:nlevels(cellTypes)) {
+    tmp_celltype <- (ifelse(cellTypes == levels(cellTypes)[i], 1, 0))
+    design <- stats::model.matrix(~tmp_celltype)
+    
+    
+    meanExprs <- do.call(cbind, lapply(c(0,1), function(i){
+      Matrix::rowMeans(exprsMat[, tmp_celltype == i, drop = FALSE])
+    }))
+    
+    meanPct <- do.call(cbind, lapply(c(0,1), function(i){
+      Matrix::rowSums(exprsMat[, tmp_celltype == i, drop = FALSE] > 0)/sum(tmp_celltype == i)
+    }))
+    
+    keep <- meanPct[,2] > exprs_pct
+    
+    y <- methods::new("EList")
+    y$E <- exprsMat[keep, ]
+    fit <- limma::lmFit(y, design = design)
+    fit <- limma::eBayes(fit, trend = TRUE, robust = TRUE)
+    tt[[i]] <- limma::topTable(fit, n = Inf, adjust.method = "BH", coef = 2)
+    
+    
+    
+    if (!is.null(tt[[i]]$ID)) {
+      tt[[i]] <- tt[[i]][!duplicated(tt[[i]]$ID),]
+      rownames(tt[[i]]) <- tt[[i]]$ID
+    }
+    
+    tt[[i]]$meanExprs.1 <- meanExprs[rownames(tt[[i]]), 1]
+    tt[[i]]$meanExprs.2 <- meanExprs[rownames(tt[[i]]), 2]
+    tt[[i]]$meanPct.1 <- meanPct[rownames(tt[[i]]), 1]
+    tt[[i]]$meanPct.2 <- meanPct[rownames(tt[[i]]), 2]
+  }
+  
+  
+  
+  return(tt)
+  
+  
+}
+
+```
+
+## Xin-Muraro
+
+```{r}
+
+df_toPlot_muraro2 <- data.frame(tSNE1 = tsne_muraro2[,1], tSNE2 = tsne_muraro2[,2], 
+                                cellTypes = muraro2$cellTypes,
+                                scClassify = xin_ensemble_res_weights$muraro$cellTypes,
+                                ensemble_scores = xin_ensemble_res_weights$muraro$scores)
+
+df_toPlot_muraro2$scClassify <- as.character(df_toPlot_muraro2$scClassify)
+
+df_toPlot_muraro2$scClassify[unlist(lapply(strsplit(df_toPlot_muraro2$scClassify, "_"), length))>1] <- "intermediate"
+
+df_toPlot_muraro2$scClassify <- factor(df_toPlot_muraro2$scClassify,
+                                       levels = c(unique(df_toPlot_muraro2$scClassify[!df_toPlot_muraro2$scClassify%in%c("intermediate", "unassigned")]),
+                                                  "intermediate", "unassigned"))
+
+
+
+
+g1 <- ggplot(df_toPlot_muraro2, aes(x = tSNE1, y = tSNE2, color = cellTypes)) +
+  geom_point() +
+  scale_color_manual(values = cellTypes_muraro_colour) +
+  theme_yx() +
+  theme(aspect.ratio = 1, legend.position = "bottom") +
+  labs(title = "Original Label by Muraro et al.")
+
+
+g2 <- ggplot(df_toPlot_muraro2, aes(x = tSNE1, y = tSNE2, color = scClassify)) +
+  geom_point() +
+  scale_color_manual(values = cellTypes_muraro_colour[levels(df_toPlot_muraro2$scClassify)]) +
+  theme_yx() +
+  theme(aspect.ratio = 1, legend.position = "bottom") +
+  labs(title = "scClassify Label (predicted by Xin et al.)") 
+
+
+```
+
+### Clustering using scClust
+
+```{r}
+muraro2_unassigned <- muraro2[, df_toPlot_muraro2$scClassify %in% c("unassigned")]
+
+muraro2_unassigned <- runTSNE(muraro2_unassigned)
+
+
+rowData(muraro2_unassigned)$feature_symbol <- rownames(muraro2_unassigned)
+
+fit <- trendVar(muraro2_unassigned, parametric = TRUE, use.spikes = FALSE)
+decomp <- decomposeVar(muraro2_unassigned, fit)
+decomp <- decomp[order(decomp$bio, decreasing = TRUE), ]
+
+hvg <- rownames(decomp)[decomp$FDR < 0.001 & decomp$bio > 0.1]
+length(hvg)
+
+library(scdney)
+mat <- logcounts(muraro2_unassigned)[hvg,]
+
+
+simlr.result <- scClust(mat, nCs = 5, 
+                        similarity = "pearson", 
+                        method = "simlr", seed = 1, cores.ratio = 0)
+
+table(simlr.result$y$cluster, muraro2_unassigned$cellTypes)
+
+
+
+muraro2_unassigned$simlr_k5 <- as.factor(simlr.result$y$cluster)
+
+plotTSNE(muraro2_unassigned, colour_by = "simlr_k5")
+# plotTSNE(muraro2_unassigned, colour_by = "sc3_5_clusters")
+
+
+#acinar: PRSS1; ductal: SPP1, KRT19; stellate: COL1A1; endothelial: ESAM; delta: SST
+deList <- doLimma(logcounts(muraro2_unassigned), muraro2_unassigned$simlr_k5)
+deList_filtered <- lapply(deList, function(x) {
+  # x <- x[order(x$adj.P.Val, decreasing = T),]
+  rownames(x)[x$adj.P.Val < 0.001 & x$logFC > 2.5][1:30]
+})
+# 
+# deList_filtered <- lapply(deList, function(x) rownames(x[order(x$logFC, decreasing = T),])[1:20])
+
+
+
+ind <- order(muraro2_unassigned$simlr_k5)
+
+
+
+
+annotation_col <- data.frame(scClassify_postClust = as.factor(muraro2_unassigned$simlr_k5)[ind],
+                             cellTypes = as.factor(muraro2_unassigned$cellTypes)[ind])
+scClassify_postClust_color <- c(tableau_color_pal("Jewel Bright")(9)[c(1, 2, 3, 5, 6)])
+cellTypes_color <- tableau_color_pal("Tableau 10")(9)
+
+names(scClassify_postClust_color) <- levels(annotation_col$scClassify_postClust)
+# names(cellTypes_color) <- levels(annotation_col$cellTypes)
+names(cellTypes_color) <- levels(as.factor(muraro2$cellTypes))
+
+
+annotation_colour <- list(scClassify_postClust = scClassify_postClust_color,
+                          cellTypes = cellTypes_color
+)
+rownames(annotation_col) <- colnames(mat)[ind]
+
+
+set.seed(12345)
+
+pheatmap(mat[na.omit(unlist(deList_filtered[c(2, 3, 1, 5, 4)])),ind], 
+         cluster_cols = TRUE, cluster_rows = FALSE,
+         clustering_method = "ward.D",
+         clustering_distance_cols = "correlation",
+         show_colnames = FALSE,
+         annotation_col = annotation_col,
+         annotation_colors = annotation_colour)
+
+
+
+
+
+
+
+
+
+muraro_postClust <- as.character(muraro2_unassigned$simlr_k5)
+names(muraro_postClust) <- colnames(muraro2_unassigned)
+# muraro_postClust[muraro_postClust == "4"] <- "acinar (Cluster 4)"
+# muraro_postClust[muraro_postClust == "3"] <- "stellate (Cluster 3)"
+# muraro_postClust[muraro_postClust == "2"] <- "ductal (Cluster 2)"
+# muraro_postClust[muraro_postClust == "5"] <- "endothelial (Cluster 5)"
+# muraro_postClust[muraro_postClust == "1"] <- "delta (Cluster 1)"
+
+
+muraro_postClust[muraro_postClust == "2"] <- "acinar"
+muraro_postClust[muraro_postClust == "3"] <- "stellate"
+muraro_postClust[muraro_postClust == "1"] <- "ductal"
+muraro_postClust[muraro_postClust == "5"] <- "endothelial"
+muraro_postClust[muraro_postClust == "4"] <- "delta"
+
+
+
+scClassify_postClust_color <- cellTypes_color[unique(muraro_postClust)]
+
+annotation_colour <- list(scClassify_postClust = scClassify_postClust_color,
+                          cellTypes = cellTypes_color
+)
+rownames(annotation_col) <- colnames(mat)[ind]
+
+
+annotation_col <- data.frame(scClassify_postClust = as.factor(muraro_postClust)[ind],
+                             cellTypes = as.factor(muraro2_unassigned$cellTypes)[ind])
+
+set.seed(12345)
+
+# pdf("figures/FigureEV4A_xin_ToMuraro_ensemble_heatmap_byCellNames", width = 10, height = 12)
+pheatmap(mat[na.omit(unlist(deList_filtered[c(2, 3, 1, 5, 4)])),ind], 
+         cluster_cols = TRUE, cluster_rows = FALSE,
+         clustering_method = "ward.D",
+         clustering_distance_cols = "correlation",
+         show_colnames = FALSE,
+         annotation_col = annotation_col,
+         annotation_colors = annotation_colour,
+         filename = "figures/FigureEV4A_xin_ToMuraro_ensemble_heatmap_byCellNames.pdf",
+         width = 10, height = 12)
+
+# dev.off()
+
+
+
+df_toPlot_muraro2$scClassify_postClust <- as.character(df_toPlot_muraro2$scClassify)
+df_toPlot_muraro2[names(muraro_postClust),]$scClassify_postClust <- muraro_postClust
+
+
+g3 <- ggplot(df_toPlot_muraro2, aes(x = tSNE1, y = tSNE2, color = scClassify_postClust)) +
+  geom_point() +
+  scale_color_manual(values = cellTypes_muraro_colour) +
+  theme_bw() +
+  theme_yx() +
+  theme(aspect.ratio = 1, legend.position = "bottom") +
+  labs(title = "scClassify Post-clustered Label") 
+
+
+grid.arrange(g1, g2, g3, ncol = 3)
+
+pdf("figures/Figure4A_xin_ToMuraro_ensemble_tSNE_withPost.pdf", width = 18, height = 8)
+grid.arrange(g1, g2, g3, ncol = 3)
+dev.off()
+
+sum(df_toPlot_muraro2$cellTypes == df_toPlot_muraro2$scClassify_postClust)/length(df_toPlot_muraro2$cellTypes)
+```
+
+
+
+
+
+## Xin-Wang
+
+```{r}
+
+set.seed(2019)
+wang <- runTSNE(wang)
+tsne_wang <- reducedDim(wang, "TSNE")
+
+
+df_toPlot_wang <- data.frame(tSNE1 = tsne_wang[,1], tSNE2 = tsne_wang[,2], 
+                             cellTypes = wang$cellTypes,
+                             scClassify = xin_ensemble_res_weights$wang$cellTypes,
+                             ensemble_scores = xin_ensemble_res_weights$wang$scores)
+
+df_toPlot_wang$scClassify <- as.character(df_toPlot_wang$scClassify)
+
+df_toPlot_wang$scClassify[unlist(lapply(strsplit(df_toPlot_wang$scClassify, "_"), length))>1] <- "intermediate"
+
+df_toPlot_wang$scClassify <- factor(df_toPlot_wang$scClassify,
+                                    levels = c(unique(df_toPlot_wang$scClassify[!df_toPlot_wang$scClassify%in%c("intermediate", "unassigned")]),
+                                               "intermediate", "unassigned"))
+
+
+cellTypes_wang_colour <- c(tableau_color_pal("Tableau 10")(7), tableau_color_pal("Tableau 20")(14)[c(14, 13)])
+names(cellTypes_wang_colour) <- c(unique(c(names(table(xin$cellTypes)), unique(wang$cellTypes))), "intermediate", "unassigned")
+
+
+g1 <- ggplot(df_toPlot_wang, aes(x = tSNE1, y = tSNE2, color = cellTypes)) +
+  geom_point() +
+  scale_color_manual(values = cellTypes_wang_colour) +
+  theme_yx() +
+  theme(aspect.ratio = 1, legend.position = "bottom") +
+  labs(title = "Original Label by Wang et al.")
+
+
+g2 <- ggplot(df_toPlot_wang, aes(x = tSNE1, y = tSNE2, color = scClassify)) +
+  geom_point() +
+  scale_color_manual(values = cellTypes_wang_colour[levels(df_toPlot_wang$scClassify)]) +
+  theme_yx() +
+  theme(aspect.ratio = 1, legend.position = "bottom") +
+  labs(title = "scClassify Label (predicted by Xin et al.)") 
+
+
+```
+
+### Clustering using scClust
+
+```{r}
+wang_unassigned <- wang[, df_toPlot_wang$scClassify %in% c("unassigned")]
+
+wang_unassigned <- runTSNE(wang_unassigned)
+
+
+rowData(wang_unassigned)$feature_symbol <- rownames(wang_unassigned)
+
+fit <- trendVar(wang_unassigned, parametric = TRUE, use.spikes = FALSE)
+decomp <- decomposeVar(wang_unassigned, fit)
+decomp <- decomp[order(decomp$bio, decreasing = TRUE), ]
+
+hvg <- rownames(decomp)[decomp$FDR < 0.001 & decomp$bio > 1]
+length(hvg)
+
+library(scdney)
+mat <- logcounts(wang_unassigned)[hvg,]
+
+
+simlr.result <- scClust(mat, nCs = 2, 
+                        similarity = "pearson", 
+                        method = "simlr", seed = 1, cores.ratio = 0)
+
+wang_unassigned$simlr_k2 <- as.factor(simlr.result$y$cluster)
+
+plotTSNE(wang_unassigned, colour_by = "simlr_k2")
+# plotTSNE(wang_unassigned, colour_by = "sc3_5_clusters")
+
+
+table(wang_unassigned$simlr_k2, wang_unassigned$cellTypes)
+
+mclust::adjustedRandIndex(wang_unassigned$simlr_k2, wang_unassigned$cellTypes)
+#acinar: PRSS1; ductal: SPP1, KRT19; stellate: COL1A1; endothelial: ESAM; delta: SST
+deList <- doLimma(mat, wang_unassigned$simlr_k2)
+deList_filtered <- lapply(deList, function(x) {
+  # x <- x[order(x$adj.P.Val, decreasing = T),]
+  rownames(x)[x$adj.P.Val < 0.01 & x$logFC > 2.5][1:25]
+})
+# 
+
+
+
+ind <- order(wang_unassigned$simlr_k2)
+
+
+
+
+annotation_col <- data.frame(scClassify_postClust = as.factor(wang_unassigned$simlr_k2)[ind],
+                             cellTypes = as.factor(wang_unassigned$cellTypes)[ind])
+scClassify_postClust_color <- c(tableau_color_pal("Jewel Bright")(9)[c(1, 2)])
+
+
+names(scClassify_postClust_color) <- levels(annotation_col$scClassify_postClust)
+
+
+
+annotation_colour <- list(scClassify_postClust = scClassify_postClust_color,
+                          cellTypes = cellTypes_wang_colour[levels(as.factor(wang$cellTypes))]
+)
+rownames(annotation_col) <- colnames(mat)[ind]
+
+
+pheatmap(logcounts(wang_unassigned)[na.omit(unlist(deList_filtered[c(1, 2)])),ind], 
+         cluster_cols = TRUE, cluster_rows = FALSE,
+         clustering_method = "ward.D",
+         clustering_distance_cols = "correlation",
+         show_colnames = FALSE,
+         annotation_col = annotation_col,
+         annotation_colors = annotation_colour)
+
+
+
+wang_postClust <- as.character(wang_unassigned$simlr_k2)
+names(wang_postClust) <- colnames(wang_unassigned)
+
+
+wang_postClust[wang_postClust == "1"] <- "ductal"
+wang_postClust[wang_postClust == "2"] <- "stellate"
+
+
+
+
+annotation_colour <- list(scClassify_postClust = cellTypes_wang_colour[levels(as.factor(wang$cellTypes))],
+                          cellTypes = cellTypes_wang_colour[levels(as.factor(wang$cellTypes))]
+)
+rownames(annotation_col) <- colnames(mat)[ind]
+
+
+annotation_col <- data.frame(scClassify_postClust = as.factor(wang_postClust)[ind],
+                             cellTypes = as.factor(wang_unassigned$cellTypes)[ind])
+
+set.seed(12345)
+
+pheatmap(mat[na.omit(unlist(deList_filtered[c(2, 1)])),], 
+         cluster_cols = TRUE, cluster_rows = FALSE,
+         clustering_method = "ward.D",
+         clustering_distance_cols = "correlation",
+         show_colnames = FALSE,
+         annotation_col = annotation_col,
+         annotation_colors = annotation_colour,
+         filename = "figures/FigureEV4C_xin_Towang_ensemble_heatmap_byCellNames.pdf",
+         width = 10, height = 12)
+
+
+
+df_toPlot_wang$scClassify_postClust <- as.character(df_toPlot_wang$scClassify)
+df_toPlot_wang[names(wang_postClust),]$scClassify_postClust <- wang_postClust
+
+
+g3 <- ggplot(df_toPlot_wang, aes(x = tSNE1, y = tSNE2, color = scClassify_postClust)) +
+  geom_point() +
+  scale_color_manual(values = cellTypes_wang_colour) +
+  theme_bw() +
+  theme_yx() +
+  theme(aspect.ratio = 1, legend.position = "bottom") +
+  labs(title = "scClassify Post-clustered Label") 
+
+
+grid.arrange(g1, g2, g3, ncol = 3)
+
+pdf("figures/FigureEV4B_xin_Towang_ensemble_tSNE_withPost.pdf", width = 18, height = 8)
+grid.arrange(g1, g2, g3, ncol = 3)
+dev.off()
+
+sum(df_toPlot_wang$cellTypes == df_toPlot_wang$scClassify_postClust)/length(df_toPlot_wang$cellTypes)
+```
+
+
+
+
+
+
+# SessionInfo
+
+
+```{r}
+sessionInfo()
+```
+
+
+
+
